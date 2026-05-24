@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: emiticon-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+    disk:
+      name: emiticon-jobs
+      mountPath: /app/web/jobs
+      sizeGB: 1

@@ -1,0 +1,7 @@
+﻿tunnel: f44e85a6-9b76-434d-8090-3b1a6ab3f807
+credentials-file: C:\Users\GYJU\.cloudflared\f44e85a6-9b76-434d-8090-3b1a6ab3f807.json
+
+ingress:
+  - hostname: api.example.com
+    service: http://127.0.0.1:8000
+  - service: http_status:404
