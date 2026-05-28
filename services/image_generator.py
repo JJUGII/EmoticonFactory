@@ -69,6 +69,46 @@ def _detect_row_starts(arr: "_np.ndarray", n_rows: int, cell_h: int) -> list[int
     return row_starts
 
 
+def _detect_col_starts(arr: "_np.ndarray", n_cols: int, cell_w: int) -> list[int]:
+    """배경 갭을 감지해 실제 캐릭터 열 시작 x 좌표를 반환 (_detect_row_starts 의 열 버전)."""
+    import sys as _sys_tmp
+    w = arr.shape[1]
+    rgb = arr[:, :, :3].astype(_np.float32)
+    bg_mask = (rgb[:, :, 0] > 215) & (rgb[:, :, 1] > 205) & (rgb[:, :, 2] > 190)
+    bg_per_col = _np.mean(bg_mask, axis=0).astype(_np.float32)
+    kernel = _np.ones(8, dtype=_np.float32) / 8
+    smooth = _np.convolve(bg_per_col, kernel, mode="same")
+    avg_bg = float(_np.mean(smooth))
+
+    col_starts: list[int] = [0]
+    prev = 0
+    for c in range(1, n_cols):
+        expected = c * cell_w
+        lo = max(prev + int(0.3 * cell_w), 0)
+        hi = min(expected + int(0.7 * cell_w), w - 1)
+        if lo >= hi:
+            col_starts.append(expected)
+            prev = expected
+            continue
+        window = smooth[lo:hi]
+        peak_off = int(_np.argmax(window))
+        peak_x = lo + peak_off
+        peak_val = float(smooth[peak_x])
+        threshold = max(avg_bg + 0.15, 0.55)
+        if peak_val >= threshold:
+            col_starts.append(peak_x)
+            prev = peak_x
+            print(
+                f"[그리드] 스마트 크롭: 열{c + 1} 시작 x={peak_x} "
+                f"(예상={expected}, 배경={peak_val:.2f})",
+                file=_sys_tmp.stderr,
+            )
+        else:
+            col_starts.append(expected)
+            prev = expected
+    return col_starts
+
+
 class BaseImageGenerator(ABC):
     """Abstract image generator used by the CLI pipeline."""
 
@@ -1100,21 +1140,23 @@ class OpenAIImageGenerator(BaseImageGenerator):
                 file=_sys.stderr,
             )
 
-            # 스마트 행 시작점 감지: AI가 셀 경계를 넘어 캐릭터를 그리는 경우
-            # 수평 배경 갭(흰색 공백)을 찾아 실제 캐릭터 행 시작점으로 보정
+            # 스마트 행/열 시작점 감지: AI가 셀 경계를 넘어 캐릭터를 그리는 경우
+            # 배경 갭(흰색 공백)을 찾아 실제 캐릭터 위치로 크롭 창을 보정
             grid_arr = _np.array(grid_img)
             row_starts = _detect_row_starts(grid_arr, ROWS, cell_h)
+            col_starts = _detect_col_starts(grid_arr, COLS, cell_w)
 
             for idx, row in enumerate(cuts):
                 cid = str(row["item"].get("id", f"{idx + 1:02d}"))
                 r, c = divmod(idx, COLS)
-                x0, x1 = c * cell_w, (c + 1) * cell_w
+                x0 = col_starts[c]
+                x1 = min(x0 + cell_w, gw)
                 y0 = row_starts[r]
                 y1 = min(y0 + cell_h, gh)
                 try:
                     cell = grid_img.crop((x0, y0, x1, y1))
-                    # 크롭이 cell_h보다 짧으면 흰색으로 패딩
-                    if cell.size[1] < cell_h:
+                    # 크롭이 목표 크기보다 작으면 흰색으로 패딩
+                    if cell.size[0] < cell_w or cell.size[1] < cell_h:
                         padded = Image.new("RGBA", (cell_w, cell_h), (255, 255, 255, 255))
                         padded.paste(cell, (0, 0))
                         cell = padded
