@@ -15,9 +15,58 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as _np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from services.image_io import ImageReadError, pil_open_image, pil_save_image
+
+
+def _detect_row_starts(arr: "_np.ndarray", n_rows: int, cell_h: int) -> list[int]:
+    """배경 갭을 감지해 실제 캐릭터 행 시작 y 좌표를 반환.
+
+    AI가 셀 경계를 넘겨 캐릭터를 그릴 때 (예: 256px 셀에 330px 캐릭터),
+    수평 흰색 공백을 찾아 실제 캐릭터 시작점으로 크롭 창을 보정한다.
+    갭이 명확하지 않으면 고정 셀 경계(cell_h 배수)로 폴백.
+    """
+    h = arr.shape[0]
+    rgb = arr[:, :, :3].astype(_np.float32)
+    # 배경 픽셀: R>215, G>205, B>190 (흰/크림색 배경)
+    bg_mask = (rgb[:, :, 0] > 215) & (rgb[:, :, 1] > 205) & (rgb[:, :, 2] > 190)
+    bg_per_row = _np.mean(bg_mask, axis=1).astype(_np.float32)
+    # 8px 슬라이딩 평균 스무딩
+    kernel = _np.ones(8, dtype=_np.float32) / 8
+    smooth = _np.convolve(bg_per_row, kernel, mode="same")
+    avg_bg = float(_np.mean(smooth))
+
+    row_starts: list[int] = [0]
+    prev = 0
+    for r in range(1, n_rows):
+        expected = r * cell_h
+        # 이전 갭에서 +30% ~ expected +70% 범위 탐색 (단조 증가 보장)
+        lo = max(prev + int(0.3 * cell_h), 0)
+        hi = min(expected + int(0.7 * cell_h), h - 1)
+        if lo >= hi:
+            row_starts.append(expected)
+            prev = expected
+            continue
+        window = smooth[lo:hi]
+        peak_off = int(_np.argmax(window))
+        peak_y = lo + peak_off
+        peak_val = float(smooth[peak_y])
+        threshold = max(avg_bg + 0.15, 0.55)
+        if peak_val >= threshold:
+            row_starts.append(peak_y)
+            prev = peak_y
+            import sys as _sys_tmp
+            print(
+                f"[그리드] 스마트 크롭: 행{r + 1} 시작 y={peak_y} "
+                f"(예상={expected}, 배경={peak_val:.2f})",
+                file=_sys_tmp.stderr,
+            )
+        else:
+            row_starts.append(expected)
+            prev = expected
+    return row_starts
 
 
 class BaseImageGenerator(ABC):
@@ -901,15 +950,14 @@ class OpenAIImageGenerator(BaseImageGenerator):
 
         suffix = self._SUFFIX_NO_AI_TEXT if self.no_ai_text else self._SUFFIX_AI_TEXT
 
-        # images.edit용 그리드 레이아웃: 스타일 지시 최소화 (참조 이미지가 스타일을 정의)
+        # images.edit용 그리드 레이아웃: gpt-image-1 images.edit 지원 크기 = 1024×1024 only (square)
         edit_grid_layout = (
             "\n\n[4×4 스프라이트 시트 — 엄격한 셀 규칙]\n"
             "캔버스: 1024×1024px. 정확히 4열×4행=16칸으로 분할. 각 셀=256×256px.\n"
             "★ 핵심 규칙: 각 캐릭터는 반드시 자신의 셀 안에 완전히 들어와야 함.\n"
-            "  - 머리끝~(허리 또는 상체 하단)이 모두 256×256px 셀 경계 안에 포함.\n"
-            "  - 셀 경계(x=256, 512, 768 / y=256, 512, 768)를 절대 넘으면 안 됨.\n"
-            "  - 뷰: 상반신 위주(얼굴+어깨+상체). 전신 표현 금지.\n"
-            "  - 캐릭터 실제 그림 크기: 셀의 75% 이하 (최대 192×192px). 상하좌우 여백 32px+.\n"
+            "  - 셀 경계(x=256,512,768 / y=256,512,768)를 절대 넘으면 안 됨.\n"
+            "  - 뷰: 얼굴 클로즈업 위주(얼굴+어깨 정도). 하체·발·전신 표현 금지.\n"
+            "  - 캐릭터 실제 그림 크기: 셀의 80% 이하 (최대 200×200px). 상하좌우 여백 28px+.\n"
             "모든 셀에서 동일한 캐릭터(종·얼굴·색·무늬 고정), 포즈·표정만 컷별 변경.\n"
             "셀 순서: 좌→우, 위→아래 (Cell01=1행1열 … Cell16=4행4열).\n"
             "배경: 흰색. 구분선·번호·텍스트 없음.\n\n"
@@ -923,8 +971,8 @@ class OpenAIImageGenerator(BaseImageGenerator):
             "\n\n[4×4 스프라이트 시트 — 엄격한 셀 규칙]\n"
             "캔버스: 1024×1024px. 정확히 4열×4행=16칸으로 분할. 각 셀=256×256px.\n"
             "★ 핵심 규칙: 각 캐릭터는 반드시 자신의 셀 안에 완전히 들어와야 함.\n"
-            "  - 머리끝~상체가 모두 셀 경계 안에 포함. 전신 금지.\n"
-            "  - 캐릭터 크기 셀의 75% 이하, 여백 32px+.\n"
+            "  - 셀 경계(x=256,512,768 / y=256,512,768)를 절대 넘으면 안 됨.\n"
+            "  - 캐릭터 크기 셀의 80% 이하, 여백 28px+.\n"
             "모든 셀 동일 캐릭터, 포즈·표정만 변경. 셀 순서: 좌→우, 위→아래.\n\n"
             + "\n".join(cell_lines)
             + "\n\n[AI 렌더 규칙]\n"
@@ -944,6 +992,7 @@ class OpenAIImageGenerator(BaseImageGenerator):
         composed = base_prompt + gen_grid_layout
 
         # ── 2. API 호출 (images.edit 우선, 실패 시 images.generate 폴백) ──
+        # gpt-image-1 images.edit 지원 크기: 1024x1024 (square only)
         grid_size = "1024x1024"
         client = OpenAI()
         tmp_grid = raw_out_dir / "_grid_raw.png"
@@ -1051,20 +1100,24 @@ class OpenAIImageGenerator(BaseImageGenerator):
                 file=_sys.stderr,
             )
 
-            # 스마트 크롭: 각 셀에 bleed 영역 포함 후 cell_w×cell_h 로 리사이즈
-            # AI가 셀 경계를 약간 넘기는 경우 잘리지 않도록 ±BLEED px 확장 크롭
-            BLEED = 20
+            # 스마트 행 시작점 감지: AI가 셀 경계를 넘어 캐릭터를 그리는 경우
+            # 수평 배경 갭(흰색 공백)을 찾아 실제 캐릭터 행 시작점으로 보정
+            grid_arr = _np.array(grid_img)
+            row_starts = _detect_row_starts(grid_arr, ROWS, cell_h)
+
             for idx, row in enumerate(cuts):
                 cid = str(row["item"].get("id", f"{idx + 1:02d}"))
                 r, c = divmod(idx, COLS)
-                x0 = max(0, c * cell_w - BLEED)
-                y0 = max(0, r * cell_h - BLEED)
-                x1 = min(gw, c * cell_w + cell_w + BLEED)
-                y1 = min(gh, r * cell_h + cell_h + BLEED)
+                x0, x1 = c * cell_w, (c + 1) * cell_w
+                y0 = row_starts[r]
+                y1 = min(y0 + cell_h, gh)
                 try:
                     cell = grid_img.crop((x0, y0, x1, y1))
-                    # 원래 셀 크기(cell_w×cell_h)로 리사이즈 → 블리드가 있으면 약간 축소
-                    cell = cell.resize((cell_w, cell_h), Image.Resampling.LANCZOS)
+                    # 크롭이 cell_h보다 짧으면 흰색으로 패딩
+                    if cell.size[1] < cell_h:
+                        padded = Image.new("RGBA", (cell_w, cell_h), (255, 255, 255, 255))
+                        padded.paste(cell, (0, 0))
+                        cell = padded
                     cell_path = raw_out_dir / f"{cid}.png"
                     cell.save(cell_path, format="PNG")
                     succeeded[cid] = cell_path
