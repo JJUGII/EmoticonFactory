@@ -25,8 +25,6 @@ type Props = {
   onFileError: (message: string) => void;
   artStyle?: ArtStyle;
   onArtStyleChange?: (v: ArtStyle) => void;
-  gridMode?: boolean;
-  onGridModeChange?: (v: boolean) => void;
   speciesHint?: string;
   onSpeciesHintChange?: (v: string) => void;
 };
@@ -39,8 +37,6 @@ export function StepUpload({
   onFileError,
   artStyle = "illustration",
   onArtStyleChange,
-  gridMode = false,
-  onGridModeChange,
   speciesHint = "",
   onSpeciesHintChange,
 }: Props) {
@@ -203,30 +199,6 @@ export function StepUpload({
             </button>
           </div>
         </div>
-
-        {/* 그리드 모드 */}
-        <label className="flex cursor-pointer items-center justify-between rounded-xl border border-kakao-brown/10 bg-kakao-cream/60 px-3 py-2">
-          <div>
-            <p className="text-sm font-medium text-kakao-brown">그리드 모드</p>
-            <p className="text-xs text-kakao-brown/60">
-              16컷을 4×4 이미지 1장으로 생성 → API 1회 호출 (비용 절감)
-            </p>
-          </div>
-          <div
-            role="switch"
-            aria-checked={gridMode}
-            onClick={() => onGridModeChange?.(!gridMode)}
-            className={`relative ml-3 h-6 w-11 shrink-0 rounded-full transition-colors ${
-              gridMode ? "bg-kakao-yellow" : "bg-kakao-brown/20"
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                gridMode ? "translate-x-5" : "translate-x-0.5"
-              }`}
-            />
-          </div>
-        </label>
 
       </div>
     </div>

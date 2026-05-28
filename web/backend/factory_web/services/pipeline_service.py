@@ -114,7 +114,7 @@ class PipelineService:
             candidate_count=3,
             candidate_openai_model=str(job.get("candidate_openai_model") or "gpt-image-1"),
             candidate_openai_mode=str(job.get("candidate_openai_mode") or "auto"),
-            grid_mode=bool(job.get("grid_mode", False)),
+            grid_mode=True,
             art_style=str(job.get("art_style") or "illustration").strip().lower(),
         )
 
@@ -278,7 +278,8 @@ class PipelineService:
     def _resolve_upload(self, job_id: str) -> Path:
         job = self.store.load(job_id)
         up_dir = self.store.job_dir(job_id) / "uploads"
-        files = sorted(up_dir.glob("*.*"))
+        # ._* 파일은 exFAT macOS AppleDouble 메타파일 — 실제 이미지 아님
+        files = sorted(f for f in up_dir.glob("*.*") if not f.name.startswith("._"))
         if not files:
             raise FileNotFoundError("uploaded image missing")
         return files[0]

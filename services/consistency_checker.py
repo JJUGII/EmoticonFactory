@@ -743,6 +743,8 @@ def copy_failed_consistency(
     dest.mkdir(parents=True, exist_ok=True)
     # Clear previous copies (same stem)
     for old in dest.glob("*.png"):
+        if old.name.startswith("._"):
+            continue
         try:
             old.unlink()
         except OSError:

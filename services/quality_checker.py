@@ -102,7 +102,10 @@ class QualityChecker:
         if missing_icon:
             errors.append(f"아이콘 누락({len(missing_icon)}): 예) {missing_icon[:3]}")
 
-        share_candidates = sorted(share_dir.glob("*.png")) if share_dir.is_dir() else []
+        share_candidates = sorted(
+            p for p in (share_dir.glob("*.png") if share_dir.is_dir() else [])
+            if not p.name.startswith("._")
+        )
         if not share_candidates:
             errors.append(f"공유 이미지가 없습니다: {share_dir}")
         elif len(share_candidates) > 1:

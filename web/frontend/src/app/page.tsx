@@ -35,7 +35,6 @@ export default function HomePage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [generator] = useState("openai");
-  const [gridMode, setGridMode] = useState(false);
   const [artStyle, setArtStyle] = useState<"illustration" | "realistic">("illustration");
   const [speciesHint, setSpeciesHint] = useState("");
   const [loading, setLoading] = useState(false);
@@ -146,7 +145,7 @@ export default function HomePage() {
     setStep(4);
     setLoading(true);
     try {
-      const initial = await generateEmoticons(jobId, emotions, generator, gridMode, artStyle);
+      const initial = await generateEmoticons(jobId, emotions, generator, true, artStyle);
       setJobStatus(initial);
       stopPollRef.current?.();
       stopPollRef.current = pollJob(
@@ -224,8 +223,6 @@ export default function HomePage() {
               onFileError={setUploadError}
               artStyle={artStyle}
               onArtStyleChange={setArtStyle}
-              gridMode={gridMode}
-              onGridModeChange={setGridMode}
               speciesHint={speciesHint}
               onSpeciesHintChange={setSpeciesHint}
             />

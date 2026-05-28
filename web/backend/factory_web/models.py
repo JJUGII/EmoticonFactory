@@ -60,7 +60,7 @@ class GenerateEmoticonsRequest(BaseModel):
     generator: str = "openai"
     theme: str = "사랑"
     species_hint: str = ""
-    grid_mode: bool = False
+    grid_mode: bool = True
     art_style: str = "illustration"  # "illustration" | "realistic"
 
 

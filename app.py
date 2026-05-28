@@ -1499,8 +1499,12 @@ def main(argv: list[str] | None = None) -> int:
 
         packaged_original_ref = character_dir / "reference.png"
         try:
-            shutil.copy2(character_path, packaged_original_ref)
-        except OSError as exc:
+            # shutil.copy2 대신 PIL로 변환저장 — exFAT에서 shutil.copy2가
+            # AppleDouble 메타데이터만 쓰는 버그 회피 + 정식 PNG 보장
+            from PIL import Image as _PILImage
+            _ref_img = _PILImage.open(Path(character_path)).convert("RGBA")
+            _ref_img.save(packaged_original_ref, format="PNG")
+        except Exception as exc:
             print(
                 f"[경고] character/reference.png 로 원본을 복사하지 못했습니다: {exc}",
                 file=sys.stderr,
@@ -2600,7 +2604,11 @@ def main(argv: list[str] | None = None) -> int:
         processor.create_share_image(series_name, share_sources, share_dir / "share.png")
 
         ref_dest = meta_dir / "reference.png"
-        shutil.copy2(character_path, ref_dest)
+        try:
+            from PIL import Image as _PILImage
+            _PILImage.open(Path(character_path)).convert("RGBA").save(ref_dest, format="PNG")
+        except Exception:
+            shutil.copy2(character_path, ref_dest)
 
         animated_for_package: list[dict[str, object]] | None = None
         if effective_make_webp:

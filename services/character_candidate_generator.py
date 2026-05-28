@@ -67,7 +67,11 @@ class BaseCharacterCandidateGenerator(ABC):
 
 
 def _prepare_image_bytes_for_edit(path: Path) -> io.BytesIO:
-    """PNG/RGBA, 최대 변 한쪽 1024 — images.edit 입력용."""
+    """PNG/RGBA, 최대 변 한쪽 1024 — images.edit 입력용.
+
+    반드시 .png 확장자로 설정해야 함 — OpenAI SDK가 bio.name으로 MIME 타입을 결정하므로
+    원본이 .jpg여도 PNG 바이트를 담은 BytesIO는 .png 이름이어야 API가 수락함.
+    """
     img = Image.open(path).convert("RGBA")
     max_side = 1024
     if max(img.size) > max_side:
@@ -75,7 +79,7 @@ def _prepare_image_bytes_for_edit(path: Path) -> io.BytesIO:
     bio = io.BytesIO()
     img.save(bio, format="PNG", optimize=True)
     bio.seek(0)
-    bio.name = path.name if path.suffix else "input.png"
+    bio.name = "input.png"  # 항상 .png — 내용도 PNG이므로 일치해야 함
     return bio
 
 
@@ -328,8 +332,28 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
             print(f"[특징추출] 실패, 기본값 사용: {exc}", file=sys.stderr)
         return {"age_group": "", "hair_length": "", "hair_color": "", "skin_tone": "", "notable": ""}
 
-    def _build_feature_hint(self, features: dict[str, str], species: str) -> str:
-        """추출된 특징을 프롬프트 주입용 한국어 문자열로 변환."""
+    def _build_guards_only(self, features: dict[str, str], species: str) -> str:
+        """Critical guards only — prevents common distortions when photo is already passed."""
+        if not features or not any(features.values()):
+            return ""
+        guards: list[str] = []
+        age = features.get("age_group", "")
+        hair_len = features.get("hair_length", "")
+        _adult_ages = {"adult man", "adult woman", "elderly man", "elderly woman"}
+        _age_ko = {
+            "adult man": "성인 남성", "adult woman": "성인 여성",
+            "elderly man": "노년 남성", "elderly woman": "노년 여성",
+        }
+        if species == "human" and age in _adult_ages:
+            guards.append(f"어린아이·유아로 그리지 마 — {_age_ko.get(age, '성인')}으로 그려줘")
+        if hair_len in ("long", "very long"):
+            guards.append("머리를 짧게 자르지 마 — 긴 머리 유지")
+        if not guards:
+            return ""
+        return "주의: " + "; ".join(guards) + "."
+
+    def _build_feature_description(self, features: dict[str, str], species: str) -> str:
+        """Full feature description — used when photo is NOT sent (generate fallback)."""
         if not features or not any(features.values()):
             return ""
         parts: list[str] = []
@@ -338,45 +362,88 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
         hair_col = features.get("hair_color", "")
         skin = features.get("skin_tone", "")
         notable = features.get("notable", "")
-
+        _age_ko = {
+            "baby": "아기", "child": "어린아이", "teen boy": "10대 소년",
+            "teen girl": "10대 소녀", "adult man": "성인 남성", "adult woman": "성인 여성",
+            "elderly man": "노년 남성", "elderly woman": "노년 여성",
+        }
+        _len_ko = {
+            "bald/very short": "아주 짧은 머리", "short": "짧은 머리",
+            "medium": "중간 길이 머리", "long": "긴 머리", "very long": "아주 긴 머리",
+        }
+        _col_ko = {
+            "black": "검은색", "dark brown": "짙은 갈색", "brown": "갈색",
+            "light brown": "밝은 갈색", "blonde": "금발", "red": "붉은색",
+            "white": "흰색", "gray": "회색", "orange": "주황색",
+        }
         if species == "human" and age:
-            _age_ko = {
-                "baby": "아기", "child": "어린아이", "teen boy": "10대 소년",
-                "teen girl": "10대 소녀", "adult man": "성인 남성", "adult woman": "성인 여성",
-                "elderly man": "노년 남성", "elderly woman": "노년 여성",
-            }
             parts.append(f"대상: {_age_ko.get(age, age)}")
         if hair_len:
-            _len_ko = {
-                "bald/very short": "아주 짧은 머리 또는 민머리", "short": "짧은 머리",
-                "medium": "중간 길이 머리", "long": "긴 머리", "very long": "아주 긴 머리",
-            }
             parts.append(f"머리 길이: {_len_ko.get(hair_len, hair_len)}")
         if hair_col:
-            _col_ko = {
-                "black": "검은색", "dark brown": "짙은 갈색", "brown": "갈색",
-                "light brown": "밝은 갈색", "blonde": "금발", "red": "붉은색",
-                "white": "흰색", "gray": "회색", "orange": "주황색",
-            }
             parts.append(f"머리색: {_col_ko.get(hair_col, hair_col)}")
         if skin and species == "human":
             parts.append(f"피부톤: {skin}")
         if notable:
             parts.append(f"특징: {notable}")
-
         if not parts:
             return ""
-
-        feature_str = ", ".join(parts)
-        lines = [
-            f"[참조 사진 특징] {feature_str}.",
-            "위 특징을 캐릭터에 그대로 반영해줘.",
-        ]
-        if species == "human" and age and "child" not in age and "baby" not in age and "teen" not in age:
-            lines.append("어린아이처럼 그리지 마. 참조 사진의 나이대를 유지해줘.")
+        lines = [f"[참조 사진 특징] {', '.join(parts)}.", "위 특징을 캐릭터에 그대로 반영해줘."]
+        _adult_ages = {"adult man", "adult woman", "elderly man", "elderly woman"}
+        if species == "human" and age in _adult_ages:
+            lines.append("어린아이처럼 그리지 마.")
         if hair_len in ("long", "very long"):
-            lines.append("머리카락 길이를 짧게 바꾸지 마. 긴 머리를 유지해줘.")
+            lines.append("긴 머리 유지.")
         return " ".join(lines)
+
+    # ── Style hints for direct edit prompts ──────────────────────────────────
+
+    _ILLUSTRATION_EDIT_STYLES: dict[int, str] = {
+        1: "귀엽고 따뜻한 수채화 일러스트 스타일",
+        2: "깔끔한 손그림 이모티콘 스타일",
+        3: "동화책 같은 따뜻한 일러스트 스타일",
+    }
+    _REALISTIC_EDIT_STYLES: dict[int, str] = {
+        1: "깔끔한 한국 웹툰 펜선 스타일, 선명한 윤곽",
+        2: "부드러운 수채 느낌의 한국 웹툰 세미-리얼 스타일",
+        3: "현대 한국 만화풍 세미-리얼 스타일, 섬세한 눈빛 강조",
+    }
+    _SPECIES_KO: dict[str, str] = {
+        "human": "인물", "cat": "고양이", "dog": "강아지",
+        "rabbit": "토끼", "hamster": "햄스터", "bird": "새",
+    }
+
+    def _build_direct_edit_prompt(
+        self,
+        *,
+        idx: int,
+        species_hint: str,
+        art_style: str = "illustration",
+        guards: str = "",
+    ) -> str:
+        """Simple direct prompt for images.edit — photo is already being sent.
+
+        The model can SEE the photo; don't re-describe it. Just say what to do.
+        """
+        subject = self._SPECIES_KO.get(species_hint, "대상") if species_hint and species_hint != "unknown" else "대상"
+        i = max(1, min(3, int(idx)))
+        if art_style == "realistic":
+            style = self._REALISTIC_EDIT_STYLES.get(i, self._REALISTIC_EDIT_STYLES[3])
+            target = "카카오톡 큰 이모티콘용 한국 웹툰 세미-리얼 캐릭터"
+        else:
+            style = self._ILLUSTRATION_EDIT_STYLES.get(i, self._ILLUSTRATION_EDIT_STYLES[3])
+            target = "카카오톡 큰 이모티콘 캐릭터"
+        parts = [
+            f"이 사진 속 {subject}을 {target}로 만들어줘.",
+            f"사진 속 얼굴·헤어스타일·색감을 그대로 살려서 {style}로.",
+            "배경 흰색. 글자·로고 없음. 1024×1024.",
+        ]
+        if guards:
+            parts.append(guards)
+        prompt = " ".join(parts)
+        if len(prompt) > 16000:
+            prompt = prompt[:15990] + "…"
+        return prompt
 
     def _edit_model(self) -> str:
         m = self.model.lower()
@@ -589,6 +656,7 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
                 edit_err = "".join(
                     traceback.format_exception_only(type(exc), exc)
                 ).strip()
+                print(f"[images.edit 실패 attempt={attempt}] {edit_err}", file=sys.stderr)
                 attempts.append(
                     {
                         "attempt": attempt,
@@ -599,6 +667,7 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
                     }
                 )
 
+        print(f"[images.edit 전부 실패] images.generate 폴백으로 전환 (사진 없이 텍스트만)", file=sys.stderr)
         gen_prompt = self._build_prompt(
             idx=idx,
             species_hint=species_hint,
@@ -693,9 +762,12 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
         # 이후 로직에서 effective_species 사용
         species_hint = effective_species
 
-        # 시각 특징 추출 — 닮은꼴 보존용
+        # 시각 특징 추출 — guards(나이대/머리 길이) 추출용
         _visual_features = self._extract_visual_features(client, photo)
-        _feature_hint = self._build_feature_hint(_visual_features, species_hint)
+        # edit용: 가드만 (사진을 직접 보내므로 묘사 불필요)
+        _guards = self._build_guards_only(_visual_features, species_hint)
+        # generate 폴백용: 전체 묘사 (사진 없이 텍스트만이므로 상세 설명 필요)
+        _feature_desc = self._build_feature_description(_visual_features, species_hint)
 
         any_fallback = False
 
@@ -705,15 +777,26 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
             style_hint = BASE_CANDIDATE_STYLE_HINTS.get(idx, "귀여운 이모티콘 감성")
             seed = BASE_CANDIDATE_VARIATION_SEEDS.get(idx, 100 + idx)
             text_only = self.mode == "generate"
-            prompt = self._build_prompt(
-                idx=idx,
-                species_hint=species_hint,
-                personality_hint=personality_hint,
-                used_character_sheet=used_character_sheet,
-                text_only=text_only,
-                art_style=art_style,
-                feature_hint=_feature_hint,
-            )
+
+            if text_only:
+                # generate 모드: 사진 없으니 상세 묘사 포함
+                prompt = self._build_prompt(
+                    idx=idx,
+                    species_hint=species_hint,
+                    personality_hint=personality_hint,
+                    used_character_sheet=used_character_sheet,
+                    text_only=True,
+                    art_style=art_style,
+                    feature_hint=_feature_desc,
+                )
+            else:
+                # edit 모드 (auto/edit): 사진을 같이 보내므로 단순 직접 프롬프트
+                prompt = self._build_direct_edit_prompt(
+                    idx=idx,
+                    species_hint=species_hint,
+                    art_style=art_style,
+                    guards=_guards,
+                )
 
             entry: dict[str, Any] = {
                 "index": idx,
@@ -737,7 +820,7 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
                 species_hint=species_hint,
                 personality_hint=personality_hint,
                 used_character_sheet=used_character_sheet,
-                feature_hint=_feature_hint,
+                feature_hint=_feature_desc,  # 폴백 generate용 상세 묘사
             )
             entry["api_phase"] = render["api_phase"]
             entry["used_image_reference"] = render["used_image_reference"]
@@ -795,7 +878,7 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
             text_only_fallback=result.text_only_fallback,
             drift_risk_warning=result.drift_risk_warning,
             fallback_warning=result.fallback_warning,
-            visual_features=_visual_features if any(_visual_features.values()) else None,
+            visual_features=_visual_features if _visual_features and any(_visual_features.values()) else None,
         )
         manifest.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         result.manifest_path = manifest
