@@ -595,7 +595,7 @@ def _prepare_image_bytes_for_edit(path: Path) -> io.BytesIO:
     bio = io.BytesIO()
     img.save(bio, format="PNG", optimize=True)
     bio.seek(0)
-    bio.name = path.name if path.suffix else "input.png"
+    bio.name = "input.png"  # 항상 .png — 내용도 PNG이므로 MIME 일치 필수
     return bio
 
 
@@ -914,27 +914,54 @@ class OpenAIImageGenerator(BaseImageGenerator):
 
         composed = base_prompt + grid_block
 
-        # ── 2. API 호출 (images.generate — 그리드 레이아웃 제어) ─────
+        # ── 2. API 호출 (images.edit 우선, 실패 시 images.generate 폴백) ──
         grid_size = "1024x1024"
         client = OpenAI()
         tmp_grid = raw_out_dir / "_grid_raw.png"
+
+        rf = Path(reference_path) if reference_path else None
+        ref_ok = rf is not None and rf.is_file() and self._try_edit_first()
+
+        # images.edit용 프롬프트: 참조 이미지를 그대로 유지하면서 그리드 생성
+        edit_composed = (
+            "첨부된 참조 이미지의 캐릭터를 그대로 유지해줘 — "
+            "종·얼굴·색·헤어스타일·무늬를 바꾸지 마. "
+            "강아지·고양이·다른 사람으로 절대 바꾸지 마.\n\n"
+            + composed
+        )
 
         outer_exc: Exception | None = None
         call_ok = False
         for attempt in range(1, self.retries + 1):
             st = time.perf_counter()
             try:
-                resp = client.images.generate(
-                    model=self.model,
-                    prompt=composed[:4000],
-                    size=grid_size,
-                    n=1,
-                )
+                if ref_ok:
+                    assert rf is not None
+                    bio = _prepare_image_bytes_for_edit(rf)
+                    em = self._edit_api_model()
+                    resp = client.images.edit(
+                        model=em,
+                        image=bio,
+                        prompt=edit_composed[:16000],
+                        n=1,
+                        size=grid_size,
+                    )
+                    phase = "grid.edit"
+                    phase_label = f"images.edit (참조: {rf.name})"
+                else:
+                    resp = client.images.generate(
+                        model=self.model,
+                        prompt=composed[:4000],
+                        size=grid_size,
+                        n=1,
+                    )
+                    phase = "grid.generate"
+                    phase_label = "images.generate"
                 ms = (time.perf_counter() - st) * 1000
                 self.last_attempt_logs.append(
                     {
                         "attempt": attempt,
-                        "phase": "grid.generate",
+                        "phase": phase,
                         "success": True,
                         "latency_ms": round(ms, 2),
                         "wall_seconds": round(ms / 1000.0, 4),
@@ -946,7 +973,7 @@ class OpenAIImageGenerator(BaseImageGenerator):
                 )
                 self._decode_response(resp, tmp_grid)
                 print(
-                    f"[그리드] images.generate 완료 ({ms / 1000:.1f}s, {grid_size}, {len(cuts)}셀)",
+                    f"[그리드] {phase_label} 완료 ({ms / 1000:.1f}s, {grid_size}, {len(cuts)}셀)",
                     file=_sys.stderr,
                 )
                 call_ok = True
@@ -954,6 +981,14 @@ class OpenAIImageGenerator(BaseImageGenerator):
             except Exception as e:
                 ms = (time.perf_counter() - st) * 1000
                 outer_exc = e
+                # images.edit 실패 → images.generate 로 폴백
+                if ref_ok:
+                    print(
+                        f"[그리드] images.edit 실패 → images.generate 폴백: {e!r}",
+                        file=_sys.stderr,
+                    )
+                    ref_ok = False
+                    continue
                 self.last_attempt_logs.append(
                     {
                         "attempt": attempt,

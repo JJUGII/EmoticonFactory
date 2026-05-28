@@ -142,11 +142,9 @@ def _infer_entity_type(
     head_d = metrics.get("head_density", 0.0)
 
     if skin > 0.38 and aspect < 0.95:
-        if eye_d > 0.42 and head_d > 0.55:
-            reasons.append("high skin tone + large eye/head region → baby")
-            return "baby", 0.62, reasons
-        reasons.append("skin-tone dominant foreground → human")
-        return "human", 0.65, reasons
+        # 피부 톤이 강한 세로형 사진 → 사람. 아기 자동감지는 휴리스틱으로 불신뢰하므로 제거.
+        reasons.append("skin-tone dominant portrait → human")
+        return "human", 0.70, reasons
 
     if aspect > 1.15 and eye_d < 0.35:
         reasons.append("wide aspect, moderate eye band → dog-like silhouette")
