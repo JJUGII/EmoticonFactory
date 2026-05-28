@@ -611,6 +611,10 @@ class OpenAIImageGenerator(BaseImageGenerator):
         "중요: 알파 채널이 있는 투명 PNG, 깔끔한 플랫 스티커 일러스트, 비실사·단순 손그림 스타일. "
         "워터마크·로고·요청한 문구 외 추가 글자는 넣지 마. 배경은 단순하게."
     )
+    # images.edit 그리드용: 스타일 지시 최소화 — 참조 이미지가 스타일을 정의함
+    _SUFFIX_EDIT_GRID = (
+        "글자·워터마크·텍스트 없음. 배경 단순하게."
+    )
 
     def __init__(
         self,
@@ -876,7 +880,7 @@ class OpenAIImageGenerator(BaseImageGenerator):
         cuts = cut_payloads[: ROWS * COLS]
 
         # ── 1. 프롬프트 구성 ──────────────────────────────────────────
-        # 공통 캐릭터 블록: 첫 번째 컷 프롬프트(캐릭터 정체성·스타일 포함)
+        # text-only(generate) 모드 전용: 첫 번째 컷의 캐릭터 정체성 블록
         base_prompt = (cuts[0]["prompt"] if cuts else "").strip()
 
         cell_lines: list[str] = []
@@ -885,38 +889,59 @@ class OpenAIImageGenerator(BaseImageGenerator):
             r_num, c_num = divmod(idx, COLS)
             r_num += 1
             c_num += 1
-            cut_id_cell = str(it.get("id", f"{idx + 1:02d}"))
             emotion   = str(it.get("emotion", ""))
             body_pose = str(it.get("body_pose", ""))
             action    = str(it.get("action", ""))
-            text_val  = str(it.get("text", ""))
             prop      = str(it.get("prop", "none"))
             prop_note = f", prop={prop}" if prop and prop.lower() not in ("none", "") else ""
             cell_lines.append(
                 f"Cell{idx + 1:02d}({r_num}r{c_num}c):"
                 f" {emotion} / {body_pose} / {action}{prop_note}"
-                f" / text=«{text_val}»"
             )
 
         suffix = self._SUFFIX_NO_AI_TEXT if self.no_ai_text else self._SUFFIX_AI_TEXT
 
-        grid_block = (
+        # images.edit용 그리드 레이아웃: 스타일 지시 최소화 (참조 이미지가 스타일을 정의)
+        edit_grid_layout = (
             "\n\n[4×4 스프라이트 시트 — 엄격한 셀 규칙]\n"
             "캔버스: 1024×1024px. 정확히 4열×4행=16칸으로 분할. 각 셀=256×256px.\n"
             "★ 핵심 규칙: 각 캐릭터는 반드시 자신의 셀 안에 완전히 들어와야 함.\n"
-            "  - 머리끝~발끝이 모두 256×256px 셀 경계 안에 포함.\n"
+            "  - 머리끝~(허리 또는 상체 하단)이 모두 256×256px 셀 경계 안에 포함.\n"
             "  - 셀 경계(x=256, 512, 768 / y=256, 512, 768)를 절대 넘으면 안 됨.\n"
-            "  - 캐릭터 실제 그림 크기: 셀의 75% 이하 (최대 192×192px).\n"
-            "  - 상하좌우 여백 각 32px 이상 확보.\n"
+            "  - 뷰: 상반신 위주(얼굴+어깨+상체). 전신 표현 금지.\n"
+            "  - 캐릭터 실제 그림 크기: 셀의 75% 이하 (최대 192×192px). 상하좌우 여백 32px+.\n"
             "모든 셀에서 동일한 캐릭터(종·얼굴·색·무늬 고정), 포즈·표정만 컷별 변경.\n"
             "셀 순서: 좌→우, 위→아래 (Cell01=1행1열 … Cell16=4행4열).\n"
-            "배경: 흰색 또는 투명. 구분선·번호·텍스트 없음.\n\n"
+            "배경: 흰색. 구분선·번호·텍스트 없음.\n\n"
+            + "\n".join(cell_lines)
+            + "\n\n"
+            + self._SUFFIX_EDIT_GRID
+        )
+
+        # images.generate용 그리드 레이아웃: 스타일 suffix 포함
+        gen_grid_layout = (
+            "\n\n[4×4 스프라이트 시트 — 엄격한 셀 규칙]\n"
+            "캔버스: 1024×1024px. 정확히 4열×4행=16칸으로 분할. 각 셀=256×256px.\n"
+            "★ 핵심 규칙: 각 캐릭터는 반드시 자신의 셀 안에 완전히 들어와야 함.\n"
+            "  - 머리끝~상체가 모두 셀 경계 안에 포함. 전신 금지.\n"
+            "  - 캐릭터 크기 셀의 75% 이하, 여백 32px+.\n"
+            "모든 셀 동일 캐릭터, 포즈·표정만 변경. 셀 순서: 좌→우, 위→아래.\n\n"
             + "\n".join(cell_lines)
             + "\n\n[AI 렌더 규칙]\n"
             + suffix
         )
 
-        composed = base_prompt + grid_block
+        # images.edit용: 단순 직접 프롬프트 — 참조 이미지가 캐릭터를 정의, 스타일 묘사 최소화
+        edit_base = (
+            "첨부된 참조 이미지의 캐릭터를 그대로 사용해줘.\n"
+            "캐릭터의 외모(얼굴형·눈·헤어스타일·색상·아트 스타일)를 참조 이미지와 완전히 동일하게 유지.\n"
+            "강아지·고양이·곰·다른 동물로 절대 바꾸지 마. 참조 이미지 속 캐릭터 그대로.\n"
+            "포즈·표정·감정만 각 셀 지시에 따라 변경.\n"
+        )
+        edit_composed = edit_base + edit_grid_layout
+
+        # images.generate용 (text-only): base_prompt 포함
+        composed = base_prompt + gen_grid_layout
 
         # ── 2. API 호출 (images.edit 우선, 실패 시 images.generate 폴백) ──
         grid_size = "1024x1024"
@@ -925,14 +950,6 @@ class OpenAIImageGenerator(BaseImageGenerator):
 
         rf = Path(reference_path) if reference_path else None
         ref_ok = rf is not None and rf.is_file() and self._try_edit_first()
-
-        # images.edit용 프롬프트: 참조 이미지를 그대로 유지하면서 그리드 생성
-        edit_composed = (
-            "첨부된 참조 이미지의 캐릭터를 그대로 유지해줘 — "
-            "종·얼굴·색·헤어스타일·무늬를 바꾸지 마. "
-            "강아지·고양이·다른 사람으로 절대 바꾸지 마.\n\n"
-            + composed
-        )
 
         outer_exc: Exception | None = None
         call_ok = False
@@ -1034,13 +1051,20 @@ class OpenAIImageGenerator(BaseImageGenerator):
                 file=_sys.stderr,
             )
 
+            # 스마트 크롭: 각 셀에 bleed 영역 포함 후 cell_w×cell_h 로 리사이즈
+            # AI가 셀 경계를 약간 넘기는 경우 잘리지 않도록 ±BLEED px 확장 크롭
+            BLEED = 20
             for idx, row in enumerate(cuts):
                 cid = str(row["item"].get("id", f"{idx + 1:02d}"))
                 r, c = divmod(idx, COLS)
-                x0, y0 = c * cell_w, r * cell_h
-                x1, y1 = x0 + cell_w, y0 + cell_h
+                x0 = max(0, c * cell_w - BLEED)
+                y0 = max(0, r * cell_h - BLEED)
+                x1 = min(gw, c * cell_w + cell_w + BLEED)
+                y1 = min(gh, r * cell_h + cell_h + BLEED)
                 try:
                     cell = grid_img.crop((x0, y0, x1, y1))
+                    # 원래 셀 크기(cell_w×cell_h)로 리사이즈 → 블리드가 있으면 약간 축소
+                    cell = cell.resize((cell_w, cell_h), Image.Resampling.LANCZOS)
                     cell_path = raw_out_dir / f"{cid}.png"
                     cell.save(cell_path, format="PNG")
                     succeeded[cid] = cell_path

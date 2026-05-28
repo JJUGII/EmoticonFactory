@@ -201,7 +201,7 @@ class PetProfileAnalyzer:
         )
 
 
-def _dominant_colors(path: Path, *, max_colors: int = 5) -> list[str]:
+def _dominant_colors(path: Path, *, max_colors: int = 5, for_pet: bool = True) -> list[str]:
     """Downsample + coarse RGB buckets → readable color phrases."""
     if not path.is_file():
         return []
@@ -218,7 +218,7 @@ def _dominant_colors(path: Path, *, max_colors: int = 5) -> list[str]:
     ranked = sorted(buckets.items(), key=lambda kv: kv[1], reverse=True)
     out: list[str] = []
     for (r, g, b), _ in ranked[: max_colors * 2]:
-        label = _color_label(int(r), int(g), int(b))
+        label = _color_label(int(r), int(g), int(b), for_pet=for_pet)
         if label not in out:
             out.append(label)
         if len(out) >= max_colors:
@@ -226,18 +226,18 @@ def _dominant_colors(path: Path, *, max_colors: int = 5) -> list[str]:
     return out
 
 
-def _color_label(r: int, g: int, b: int) -> str:
+def _color_label(r: int, g: int, b: int, *, for_pet: bool = True) -> str:
     """Human-readable coarse color name."""
     if max(r, g, b) < 40:
-        return "dark coat"
+        return "dark coat" if for_pet else "dark tone"
     if min(r, g, b) > 210:
-        return "light/white fur patch"
+        return "light/white fur patch" if for_pet else "light/white"
     if r > g + 25 and r > b + 25:
-        return "warm/reddish fur"
+        return "warm/reddish fur" if for_pet else "warm reddish tone"
     if b > r + 20 and b > g + 20:
-        return "cool/gray-blue fur"
+        return "cool/gray-blue fur" if for_pet else "cool blue-gray tone"
     if abs(r - g) < 25 and abs(g - b) < 25:
-        return "neutral gray-brown fur"
+        return "neutral gray-brown fur" if for_pet else "neutral brown tone"
     if g > r + 15 and g > b + 15:
-        return "warm beige/cream fur"
-    return "mixed natural fur tone"
+        return "warm beige/cream fur" if for_pet else "warm beige tone"
+    return "mixed natural fur tone" if for_pet else "mixed natural tone"

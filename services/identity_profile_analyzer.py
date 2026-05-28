@@ -274,7 +274,8 @@ class IdentityProfileAnalyzer:
             reference_type=reference_type,
             metrics=metrics,
         )
-        colors = _dominant_colors(path, max_colors=5) if path.is_file() else []
+        _is_pet = entity not in ("human", "baby", "couple", "family", "character_art")
+        colors = _dominant_colors(path, max_colors=5, for_pet=_is_pet) if path.is_file() else []
 
         species = entity if entity not in ("character_art", "pet", "unknown", "couple", "family") else (
             str(species_hint or "unknown").strip().lower() or "unknown"
