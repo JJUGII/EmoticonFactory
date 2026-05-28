@@ -67,8 +67,22 @@ def base_candidate_prompt_for_index(
     species_hint: str = "",
     personality_hint: str = "",
     include_english_fallback: bool = False,
+    art_style: str = "illustration",
 ) -> str:
-    """Same core prompt + small style hint + guard (후보별 차이는 스타일만)."""
+    """Same core prompt + small style hint + guard (후보별 차이는 스타일만).
+
+    art_style: "illustration" (기본, 치비·수채화) | "realistic" (웹툰 세미-리얼)
+    realistic 스타일은 realistic_style 모듈에서 빌드함.
+    """
+    # realistic 스타일은 전용 빌더로 위임
+    if str(art_style).strip().lower() == "realistic":
+        from services.realistic_style import realistic_candidate_prompt_for_index
+        return realistic_candidate_prompt_for_index(
+            index_1based,
+            species_hint=species_hint,
+            personality_hint=personality_hint,
+        )
+
     i = max(1, min(8, int(index_1based)))
     hint = BASE_CANDIDATE_STYLE_HINTS.get(
         i, BASE_CANDIDATE_STYLE_HINTS.get(3, "귀여운 이모티콘 감성")
@@ -79,7 +93,15 @@ def base_candidate_prompt_for_index(
         "대상 자체는 절대 바꾸지 말 것.",
     ]
     if species_hint.strip():
-        parts.append(f"추가 힌트(종/대상): {species_hint.strip()}.")
+        sh = species_hint.strip().lower()
+        if sh == "human":
+            parts.append(
+                "대상은 사람입니다. 반드시 사람 캐릭터(치비·큐티 스타일)로 그려줘. "
+                "고양이·강아지·동물로 절대 바꾸지 마. "
+                "헤어 색상, 헤어스타일, 얼굴형을 최대한 유지해줘."
+            )
+        else:
+            parts.append(f"추가 힌트(종/대상): {sh}.")
     if personality_hint.strip():
         parts.append(f"추가 힌트(분위기): {personality_hint.strip()}.")
     parts.append(BASE_CANDIDATE_GUARD_KO)

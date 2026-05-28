@@ -15,7 +15,7 @@ from PIL import Image
 
 from services.image_io import ImageReadError, pil_open_image
 
-SpeciesHint = Literal["cat", "dog", "rabbit", "hamster", "bird", "unknown"]
+SpeciesHint = Literal["cat", "dog", "rabbit", "hamster", "bird", "human", "unknown"]
 
 # Recorded into ``package_info.json`` as ``pet_profile_source`` (stable id for tooling).
 PET_PROFILE_SOURCE = "PetProfileAnalyzer.local_heuristic_v1"
@@ -70,7 +70,7 @@ class PetProfile(BaseModel):
 class PetProfileAnalyzer:
     """v1: color sampling + optional species/personality hints."""
 
-    _ALLOWED = frozenset({"cat", "dog", "rabbit", "hamster", "bird", "unknown"})
+    _ALLOWED = frozenset({"cat", "dog", "rabbit", "hamster", "bird", "human", "unknown"})
 
     def analyze(
         self,
@@ -90,12 +90,6 @@ class PetProfileAnalyzer:
 
         main_colors = _dominant_colors(path, max_colors=5)
 
-        breed_style = (
-            f"companion {species} (photo-based; do not invent a rare breed name)"
-            if species != "unknown"
-            else "single companion pet from the reference photo (species not asserted)"
-        )
-
         pers_kw: list[str] = []
         if personality_hint and str(personality_hint).strip():
             pers_kw = [str(personality_hint).strip()]
@@ -103,6 +97,53 @@ class PetProfileAnalyzer:
         expr = "calm, neutral, sticker-friendly"
         if pers_kw:
             expr = f"{expr}; personality hint: {pers_kw[0]}"
+
+        # ── 사람 전용 프로파일 ─────────────────────────────────────────
+        if species == "human":
+            return PetProfile(
+                species="human",
+                breed_style="person from the reference photo (human character, not an animal)",
+                main_colors=main_colors or ["natural skin and hair tones from the reference"],
+                face_pattern="preserve face shape, features, and hairstyle from the photo",
+                eye_color="match eye shape and impression from the photo",
+                ear_shape="match overall head and facial structure from the photo",
+                body_shape="match the person's body shape and clothing style from the photo",
+                tail_style="not applicable (human character)",
+                expression_baseline=expr,
+                personality_keywords=pers_kw,
+                character_keywords=[
+                    "a single person based on the provided reference photo",
+                    "keep the same hair color, hairstyle, face shape, and overall appearance",
+                    "do not change into a different person, animal, or fictional creature",
+                ],
+                negative_keywords=[
+                    "different person or animal",
+                    "extra people or animals in the frame",
+                    "dramatically different hair color or hairstyle",
+                    "photorealistic texture",
+                    "busy background",
+                    "watermark or logo",
+                ],
+                consistency_rules=[
+                    "same human identity across all cuts",
+                    "same hair color and style",
+                    "same face proportions",
+                    "same clothing vibe",
+                    "same eye style",
+                    "no species change — must remain human",
+                    "no extra people",
+                    "one person only",
+                    "no realistic photo texture in final sticker",
+                ],
+                source_image=rel,
+            )
+
+        # ── 반려동물 프로파일 (기존) ──────────────────────────────────
+        breed_style = (
+            f"companion {species} (photo-based; do not invent a rare breed name)"
+            if species != "unknown"
+            else "single companion pet from the reference photo (species not asserted)"
+        )
 
         return PetProfile(
             species=species,

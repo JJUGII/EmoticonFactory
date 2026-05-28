@@ -1,29 +1,67 @@
-# dependencies / build
-node_modules/
-.next/
-out/
-dist/
+# ── 시크릿 / 환경 변수 ────────────────────────────────────────
+.env
+# .env.example 은 플레이스홀더만 포함 → 커밋 허용
 
-# python
-__pycache__/
-*.py[cod]
+# ── 가상환경 ──────────────────────────────────────────────────
 .venv/
 venv/
+env/
+
+# ── Python 캐시 ───────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 *.egg-info/
+dist/
+build/
 
-# secrets & local
-.env
-.env.local
-.env.*.local
+# ── 생성 결과물 (개인 이모티콘) ──────────────────────────────
+outputs/
+inputs/
+reference.jpg
+reference_.png
+reference*.jpg
+reference*.png
 
-# runtime data
+# ── 웹 작업 디렉토리 ──────────────────────────────────────────
 web/jobs/*
 !web/jobs/.gitkeep
-outputs/
+
+# ── Next.js ───────────────────────────────────────────────────
+web/frontend/.next/
+web/frontend/node_modules/
+node_modules/
+.next/
+
+# ── 터널 설정 (시크릿 포함) ───────────────────────────────────
+cloudflare/config.yml
+cloudflare/tunnel.env
+ngrok/ngrok.env
+
+# ── 로그 ──────────────────────────────────────────────────────
+logs/
 *.log
 
-# OS / IDE
+# ── macOS 시스템 파일 (exFAT 메타데이터) ─────────────────────
 .DS_Store
-Thumbs.db
+._*
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+
+# ── IDE ───────────────────────────────────────────────────────
 .idea/
 .vscode/
+*.swp
+*.swo
+
+# ── AI 컨텍스트 (로컬 전용) ───────────────────────────────────
+AI_CONTEXT/
+
+# ── Windows 백업 venv ─────────────────────────────────────────
+.venv_windows_backup/
+
+# ── 로컬 전용 스크립트 / 설정 ─────────────────────────────────
+config.yml

@@ -524,7 +524,20 @@ class MockImageGenerator(BaseImageGenerator):
         return img
 
     def _try_load_font(self, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-        for name in ("malgun.ttf", "Malgun.ttf", "arial.ttf", "Arial.ttf"):
+        import sys as _sys
+        if _sys.platform == "darwin":
+            platform_fonts: tuple[str, ...] = (
+                "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+                "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+            )
+        elif _sys.platform == "win32":
+            platform_fonts = ("malgun.ttf", "Malgun.ttf")
+        else:
+            platform_fonts = (
+                "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+                "/usr/share/fonts/nanum/NanumGothic.ttf",
+            )
+        for name in (*platform_fonts, "arial.ttf", "Arial.ttf"):
             try:
                 return ImageFont.truetype(name, size=size)
             except OSError:
@@ -575,9 +588,7 @@ _FALLBACK_CUT_WARNING = (
 
 def _prepare_image_bytes_for_edit(path: Path) -> io.BytesIO:
     """PNG/RGBA, max side 1024 — ``images.edit`` 입력용."""
-    from services.image_io import pil_open_image
-
-    img = pil_open_image(path).convert("RGBA")
+    img = Image.open(path).convert("RGBA")
     max_side = 1024
     if max(img.size) > max_side:
         img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
@@ -609,14 +620,12 @@ class OpenAIImageGenerator(BaseImageGenerator):
         *,
         openai_mode: str = "auto",
         no_ai_text: bool = True,
-        allow_generate_fallback: bool = True,
     ) -> None:
         self.model = model
         self.size = size
         self.retries = max(1, int(retries))
         self.openai_mode = (openai_mode or "auto").strip().lower()
         self.no_ai_text = bool(no_ai_text)
-        self.allow_generate_fallback = bool(allow_generate_fallback)
         self.last_attempt_logs: list[dict] = []
 
     def _try_edit_first(self) -> bool:
@@ -662,8 +671,6 @@ class OpenAIImageGenerator(BaseImageGenerator):
 
         from openai import OpenAI
 
-        from services.env_log import format_openai_exception, openai_client_kwargs
-
         _ = item
         self._require_key()
         self.last_attempt_logs = []
@@ -687,7 +694,7 @@ class OpenAIImageGenerator(BaseImageGenerator):
 
         rf = Path(reference_path) if reference_path else None
         ref_ok = rf is not None and rf.is_file()
-        client = OpenAI(**openai_client_kwargs())
+        client = OpenAI()
 
         edit_prompt = (
             composed
@@ -762,36 +769,19 @@ class OpenAIImageGenerator(BaseImageGenerator):
                     return output_path.resolve()
                 except Exception as e:
                     outer_last = e
-                    err_detail = format_openai_exception(e)
-                    print(
-                        f"[OpenAI 컷 {item_id}] images.edit error:\n{err_detail}",
-                        file=sys.stderr,
-                    )
                     record(
                         "images.edit",
                         False,
                         (time.perf_counter() - st) * 1000,
                         e,
                         None,
-                        extras={"edit_model": self._edit_api_model(), "detail": err_detail},
+                        extras={"edit_model": self._edit_api_model()},
                     )
-                    if not self.allow_generate_fallback:
-                        raise RuntimeError(
-                            f"[OpenAI 컷 {item_id}] images.edit 실패 — "
-                            "OPENAI_FALLBACK_FOR_EMOTICONS=false 이므로 "
-                            "images.generate 폴백을 사용하지 않습니다."
-                        ) from e
                     print(
                         f"[OpenAI 컷 {item_id}] images.edit 실패 → images.generate "
                         f"({attempt}/{self.retries}): {e!r}",
                         file=sys.stderr,
                     )
-
-            if try_edit and not self.allow_generate_fallback:
-                raise RuntimeError(
-                    f"[OpenAI 컷 {item_id}] 참조 기반 images.edit만 허용됩니다 "
-                    "(OPENAI_FALLBACK_FOR_EMOTICONS=false)."
-                ) from outer_last
 
             stg = time.perf_counter()
             try:
@@ -837,18 +827,15 @@ class OpenAIImageGenerator(BaseImageGenerator):
                 return output_path.resolve()
             except Exception as e:
                 outer_last = e
-                err_detail = format_openai_exception(e)
                 record(
                     "images.generate",
                     False,
                     (time.perf_counter() - stg) * 1000,
                     e,
                     None,
-                    extras={"detail": err_detail},
                 )
                 print(
-                    f"[OpenAI 컷 {item_id}] images.generate 실패 {attempt}/{self.retries}:\n"
-                    f"{err_detail}",
+                    f"[OpenAI 컷 {item_id}] images.generate 실패 {attempt}/{self.retries}: {e!r}",
                     file=sys.stderr,
                 )
 
@@ -858,6 +845,187 @@ class OpenAIImageGenerator(BaseImageGenerator):
         raise RuntimeError(
             f"[컷 {item_id}] OpenAI 이미지 생성 실패: {outer_last!s}"
         ) from outer_last
+
+    # ──────────────────────────────────────────────────────────────────
+    # 그리드 모드: 16컷을 4×4 스프라이트 시트 1장으로 생성 후 크롭
+    # ──────────────────────────────────────────────────────────────────
+    def generate_grid(
+        self,
+        cut_payloads: list[dict],
+        raw_out_dir: Path,
+        reference_path: Path | None = None,
+    ) -> tuple[dict[str, Path], list[str]]:
+        """16컷을 4×4 그리드 이미지 1장(API 1회)으로 생성 후 개별 셀 크롭.
+
+        Args:
+            cut_payloads: [{"item": dict, "prompt": str}, ...] (최대 16개)
+            raw_out_dir:  크롭된 셀 PNG를 저장할 디렉터리
+            reference_path: 참조 캐릭터 이미지 경로 (프롬프트 힌트용, 현재 images.generate 사용)
+
+        Returns:
+            (succeeded={cut_id: path}, failed=[cut_id, ...])
+        """
+        import sys as _sys
+        from openai import OpenAI
+
+        self._require_key()
+        raw_out_dir.mkdir(parents=True, exist_ok=True)
+        self.last_attempt_logs = []
+
+        ROWS, COLS = 4, 4
+        cuts = cut_payloads[: ROWS * COLS]
+
+        # ── 1. 프롬프트 구성 ──────────────────────────────────────────
+        # 공통 캐릭터 블록: 첫 번째 컷 프롬프트(캐릭터 정체성·스타일 포함)
+        base_prompt = (cuts[0]["prompt"] if cuts else "").strip()
+
+        cell_lines: list[str] = []
+        for idx, row in enumerate(cuts):
+            it = row["item"]
+            r_num, c_num = divmod(idx, COLS)
+            r_num += 1
+            c_num += 1
+            cut_id_cell = str(it.get("id", f"{idx + 1:02d}"))
+            emotion   = str(it.get("emotion", ""))
+            body_pose = str(it.get("body_pose", ""))
+            action    = str(it.get("action", ""))
+            text_val  = str(it.get("text", ""))
+            prop      = str(it.get("prop", "none"))
+            prop_note = f", prop={prop}" if prop and prop.lower() not in ("none", "") else ""
+            cell_lines.append(
+                f"Cell{idx + 1:02d}({r_num}r{c_num}c):"
+                f" {emotion} / {body_pose} / {action}{prop_note}"
+                f" / text=«{text_val}»"
+            )
+
+        suffix = self._SUFFIX_NO_AI_TEXT if self.no_ai_text else self._SUFFIX_AI_TEXT
+
+        grid_block = (
+            "\n\n[4×4 스프라이트 시트 지시]\n"
+            "위 캐릭터로 이모티콘 16개를 4열×4행 그리드 1장으로 그려줘.\n"
+            "캔버스: 1024×1024 투명 배경 PNG (알파채널 필수).\n"
+            "셀 크기: 256×256px 균일 배열. 구분선·번호·여백 없음.\n"
+            "모든 셀에서 동일한 캐릭터(종·얼굴·색·무늬 고정), 포즈·표정만 컷별 변경.\n"
+            "셀 순서: 좌→우, 위→아래 (Cell01=1행1열 … Cell16=4행4열).\n\n"
+            + "\n".join(cell_lines)
+            + "\n\n[AI 렌더 규칙]\n"
+            + suffix
+        )
+
+        composed = base_prompt + grid_block
+
+        # ── 2. API 호출 (images.generate — 그리드 레이아웃 제어) ─────
+        grid_size = "1024x1024"
+        client = OpenAI()
+        tmp_grid = raw_out_dir / "_grid_raw.png"
+
+        outer_exc: Exception | None = None
+        call_ok = False
+        for attempt in range(1, self.retries + 1):
+            st = time.perf_counter()
+            try:
+                resp = client.images.generate(
+                    model=self.model,
+                    prompt=composed[:4000],
+                    size=grid_size,
+                    n=1,
+                )
+                ms = (time.perf_counter() - st) * 1000
+                self.last_attempt_logs.append(
+                    {
+                        "attempt": attempt,
+                        "phase": "grid.generate",
+                        "success": True,
+                        "latency_ms": round(ms, 2),
+                        "wall_seconds": round(ms / 1000.0, 4),
+                        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                        "usage": _serialize_usage(resp),
+                        "grid_size": grid_size,
+                        "cells": len(cuts),
+                    }
+                )
+                self._decode_response(resp, tmp_grid)
+                print(
+                    f"[그리드] images.generate 완료 ({ms / 1000:.1f}s, {grid_size}, {len(cuts)}셀)",
+                    file=_sys.stderr,
+                )
+                call_ok = True
+                break
+            except Exception as e:
+                ms = (time.perf_counter() - st) * 1000
+                outer_exc = e
+                self.last_attempt_logs.append(
+                    {
+                        "attempt": attempt,
+                        "phase": "grid.generate",
+                        "success": False,
+                        "latency_ms": round(ms, 2),
+                        "wall_seconds": round(ms / 1000.0, 4),
+                        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                        "error": "".join(
+                            traceback.format_exception_only(type(e), e)
+                        ).strip(),
+                    }
+                )
+                print(
+                    f"[그리드] attempt {attempt}/{self.retries} 실패: {e!r}",
+                    file=_sys.stderr,
+                )
+                if attempt < self.retries:
+                    time.sleep(min(8.0, 2**attempt))
+
+        if not call_ok:
+            raise RuntimeError(
+                f"[그리드] OpenAI 그리드 이미지 생성 실패: {outer_exc!s}"
+            ) from outer_exc
+
+        # ── 3. 셀 크롭 ───────────────────────────────────────────────
+        succeeded: dict[str, Path] = {}
+        failed: list[str] = []
+
+        try:
+            grid_img = Image.open(tmp_grid).convert("RGBA")
+            gw, gh = grid_img.size
+            cell_w = gw // COLS
+            cell_h = gh // ROWS
+            print(
+                f"[그리드] 그리드 {gw}×{gh}px → 셀 {cell_w}×{cell_h}px",
+                file=_sys.stderr,
+            )
+
+            for idx, row in enumerate(cuts):
+                cid = str(row["item"].get("id", f"{idx + 1:02d}"))
+                r, c = divmod(idx, COLS)
+                x0, y0 = c * cell_w, r * cell_h
+                x1, y1 = x0 + cell_w, y0 + cell_h
+                try:
+                    cell = grid_img.crop((x0, y0, x1, y1))
+                    cell_path = raw_out_dir / f"{cid}.png"
+                    cell.save(cell_path, format="PNG")
+                    succeeded[cid] = cell_path
+                except Exception as crop_e:
+                    print(
+                        f"[그리드] 셀 {cid} 크롭 실패: {crop_e!r}",
+                        file=_sys.stderr,
+                    )
+                    failed.append(cid)
+
+            print(
+                f"[그리드] 크롭 완료: {len(succeeded)}성공 / {len(failed)}실패",
+                file=_sys.stderr,
+            )
+        except Exception as e:
+            print(
+                f"[그리드] 크롭 전체 실패: {e!r} — 전체 컷 fallback",
+                file=_sys.stderr,
+            )
+            failed = [
+                str(row["item"].get("id", f"{i + 1:02d}"))
+                for i, row in enumerate(cuts)
+            ]
+            succeeded = {}
+
+        return succeeded, failed
 
     def _decode_response(self, resp, output_path: Path) -> None:
         if not getattr(resp, "data", None):
@@ -896,29 +1064,16 @@ def create_image_generator(
     openai_retries: int = 3,
     openai_mode: str = "auto",
     no_ai_text: bool = True,
-    comfyui_url: str | None = None,
-    comfyui_workflow: str | Path | None = None,
 ) -> BaseImageGenerator:
     k = backend.strip().lower()
     if k == "mock":
         return MockImageGenerator()
     if k == "openai":
-        from services.generator_config import load_generator_settings
-
-        settings = load_generator_settings()
         return OpenAIImageGenerator(
             model=openai_model,
             size=openai_size,
             retries=int(openai_retries),
             openai_mode=openai_mode,
             no_ai_text=no_ai_text,
-            allow_generate_fallback=settings.openai_fallback_emoticons,
-        )
-    if k == "comfyui":
-        from services.comfyui_image_generator import ComfyUIImageGenerator
-
-        return ComfyUIImageGenerator(
-            base_url=comfyui_url,
-            workflow_path=comfyui_workflow,
         )
     raise ValueError(f"지원하지 않는 generator: {backend!r}")

@@ -22,9 +22,7 @@ from services.base_character_prompt import (
     BASE_CANDIDATE_VARIATION_SEEDS,
     base_candidate_prompt_for_index,
 )
-from services.env_log import format_openai_exception, openai_client_kwargs
 from services.image_generator import OpenAIMissingKeyError
-from services.image_io import pil_open_image
 
 _SHEET_BIBLE_KO = (
     "제공된 캐릭터 시트를 기준으로 동일한 정체성의 베이스 캐릭터로 그려줘. "
@@ -62,13 +60,14 @@ class BaseCharacterCandidateGenerator(ABC):
         output_dir: Path,
         used_character_sheet: bool = False,
         source_reference: str = "",
+        art_style: str = "illustration",
     ) -> CandidateGenerationResult:
         ...
 
 
 def _prepare_image_bytes_for_edit(path: Path) -> io.BytesIO:
     """PNG/RGBA, 최대 변 한쪽 1024 — images.edit 입력용."""
-    img = pil_open_image(path).convert("RGBA")
+    img = Image.open(path).convert("RGBA")
     max_side = 1024
     if max(img.size) > max_side:
         img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
@@ -93,14 +92,15 @@ class MockCharacterCandidateGenerator(BaseCharacterCandidateGenerator):
         output_dir: Path,
         used_character_sheet: bool = False,
         source_reference: str = "",
+        art_style: str = "illustration",
     ) -> CandidateGenerationResult:
-        _ = series_name, used_character_sheet, source_reference
+        _ = series_name, used_character_sheet, source_reference, art_style
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         n = max(1, min(8, int(count)))
         result = CandidateGenerationResult(success=True)
         try:
-            base = pil_open_image(original_photo_path).convert("RGBA")
+            base = Image.open(original_photo_path).convert("RGBA")
         except OSError as exc:
             result.success = False
             result.errors.append(repr(exc))
@@ -123,6 +123,7 @@ class MockCharacterCandidateGenerator(BaseCharacterCandidateGenerator):
                 idx,
                 species_hint=species_hint,
                 personality_hint=personality_hint,
+                art_style=art_style,
             )
             out = thumb.copy()
             out = ImageEnhance.Color(out).enhance(1.12 + (seed % 7) * 0.02)
@@ -228,6 +229,7 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
         personality_hint: str,
         used_character_sheet: bool,
         text_only: bool,
+        art_style: str = "illustration",
     ) -> str:
         prefix = _SHEET_BIBLE_KO if used_character_sheet else ""
         body = base_candidate_prompt_for_index(
@@ -235,6 +237,7 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
             species_hint=species_hint,
             personality_hint=personality_hint,
             include_english_fallback=text_only,
+            art_style=art_style,
         )
         prompt = (prefix + body).strip()
         if len(prompt) > 3900:
@@ -329,8 +332,9 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
                         "ok": True,
                     }
                 except Exception as exc:
-                    err = format_openai_exception(exc)
-                    print(f"[OpenAI candidate {idx}] images.generate error:\n{err}", file=sys.stderr)
+                    err = "".join(
+                        traceback.format_exception_only(type(exc), exc)
+                    ).strip()
                     attempts.append(
                         {
                             "attempt": attempt,
@@ -368,8 +372,9 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
                         "ok": True,
                     }
                 except Exception as exc:
-                    err = format_openai_exception(exc)
-                    print(f"[OpenAI candidate {idx}] images.edit error:\n{err}", file=sys.stderr)
+                    err = "".join(
+                        traceback.format_exception_only(type(exc), exc)
+                    ).strip()
                     attempts.append(
                         {
                             "attempt": attempt,
@@ -408,8 +413,9 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
                     "ok": True,
                 }
             except Exception as exc:
-                edit_err = format_openai_exception(exc)
-                print(f"[OpenAI candidate {idx}] images.edit error:\n{edit_err}", file=sys.stderr)
+                edit_err = "".join(
+                    traceback.format_exception_only(type(exc), exc)
+                ).strip()
                 attempts.append(
                     {
                         "attempt": attempt,
@@ -453,11 +459,9 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
                     "warning": _FALLBACK_CONSOLE_WARNING,
                 }
             except Exception as exc:
-                err = format_openai_exception(exc)
-                print(
-                    f"[OpenAI candidate {idx}] images.generate (fallback) error:\n{err}",
-                    file=sys.stderr,
-                )
+                err = "".join(
+                    traceback.format_exception_only(type(exc), exc)
+                ).strip()
                 attempts.append(
                     {
                         "attempt": attempt,
@@ -489,7 +493,10 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
         output_dir: Path,
         used_character_sheet: bool = False,
         source_reference: str = "",
+        art_style: str = "illustration",
     ) -> CandidateGenerationResult:
+        from openai import OpenAI
+
         _ = source_reference
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -497,9 +504,7 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
         result = CandidateGenerationResult(success=True)
 
         self._require_key()
-        from openai import OpenAI
-
-        client = OpenAI(**openai_client_kwargs())
+        client = OpenAI()
         photo = Path(original_photo_path)
 
         any_fallback = False
@@ -516,6 +521,7 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
                 personality_hint=personality_hint,
                 used_character_sheet=used_character_sheet,
                 text_only=text_only,
+                art_style=art_style,
             )
 
             entry: dict[str, Any] = {

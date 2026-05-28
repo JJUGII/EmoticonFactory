@@ -9,20 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from factory_web.config import FACTORY_ROOT, JOBS_ROOT, OUTPUTS_SUBDIR, UPLOADS_SUBDIR
-
-
-def _generator_fields_from_settings() -> tuple[str, str, str]:
-    """(generator_candidate, generator_emoticon, generator default for job)."""
-    import sys
-
-    root = FACTORY_ROOT.resolve()
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
-    from services.generator_config import load_generator_settings  # noqa: WPS433
-
-    s = load_generator_settings(root)
-    return s.candidate, s.emoticon, s.emoticon
+from factory_web.config import JOBS_ROOT, OUTPUTS_SUBDIR, UPLOADS_SUBDIR
 
 
 def _utc_now() -> str:
@@ -45,7 +32,6 @@ class JobStore:
         d = self.job_dir(job_id)
         (d / UPLOADS_SUBDIR).mkdir(parents=True, exist_ok=True)
         (d / OUTPUTS_SUBDIR).mkdir(parents=True, exist_ok=True)
-        cand_gen, emo_gen, default_gen = _generator_fields_from_settings()
         doc: dict[str, Any] = {
             "job_id": job_id,
             "created_at": _utc_now(),
@@ -55,10 +41,7 @@ class JobStore:
             "message": "작업이 생성되었습니다.",
             "series_name": series_name.strip() or f"Web_{job_id[:8]}",
             "theme": theme.strip() or "사랑",
-            "generator": default_gen,
-            "generator_candidate": cand_gen,
-            "generator_emoticon": emo_gen,
-            "generator_used": None,
+            "generator": "mock",
             "species_hint": "",
             "selected_candidate": None,
             "emotions": [],

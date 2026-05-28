@@ -12,8 +12,6 @@ from typing import Any, Callable
 
 from services.character_profile import CharacterProfile
 from services.consistency_checker import CharacterConsistencyChecker
-from services.identity_profile_analyzer import IdentityProfile
-from services.prompts.human_descriptors import is_human_entity
 from services.image_generator import BaseImageGenerator, OpenAIMissingKeyError
 from services.image_processor import ImageProcessor
 from services.prompt_builder import PromptBuilder
@@ -43,10 +41,6 @@ class RegenerationContext:
     style_intensity: float = 0.5
     pose_variation_strength: float = 1.0
     expression_strength: float = 1.0
-    identity_profile: IdentityProfile | None = None
-    source_mode: str = "auto"
-    output_mode: str = ""
-    emoticon_engine: str = "openai"
 
 
 # Consistency heuristics (Korean substring match) → prompt suffix phrases
@@ -103,31 +97,6 @@ CODE_SUFFIX_CONSISTENCY: dict[str, str] = {
         "restore eye spacing, eye scale, and eyelid shape to match canonical reference"
     ),
 }
-
-# Human photo subjects — no fur/paw/muzzle vocabulary in regen suffixes
-HUMAN_CODE_SUFFIX_CONSISTENCY: dict[str, str] = {
-    "face_mask_missing": (
-        "emphasize the same hairstyle, face shape, and skin tone as the canonical human reference"
-    ),
-    "fur_palette_drift": (
-        "re-harmonize hair, skin, and outfit palette with the canonical human reference (flat sticker colors)"
-    ),
-    "too_realistic": (
-        "simplify skin and clothing into flat vector shapes; no photorealistic portrait texture"
-    ),
-    "texture_flattening_detected": (
-        "restore soft illustrated skin and hair texture; avoid flat logo mascot rendering"
-    ),
-    "consistency_retry": (
-        "re-align human silhouette, face proportions, hairstyle, and palette with the canonical reference"
-    ),
-    "drift_mismatch": (
-        "match hairstyle, outfit impression, silhouette, and edge simplicity to the canonical human reference"
-    ),
-}
-_PET_ONLY_CONSISTENCY_CODES = frozenset(
-    {"face_mask_missing", "blue_eye_missing", "fur_palette_drift", "texture_flattening_detected"}
-)
 
 CODE_SUFFIX_QUALITY: dict[str, str] = {
     "bytes_budget": (
@@ -245,21 +214,10 @@ def failure_codes_quality(issues: list[Any]) -> list[str]:
     return out
 
 
-def prompt_suffix_for_codes(
-    codes: list[str],
-    failure_source: str,
-    *,
-    identity: IdentityProfile | None = None,
-) -> list[str]:
+def prompt_suffix_for_codes(codes: list[str], failure_source: str) -> list[str]:
     tbl = CODE_SUFFIX_QUALITY if failure_source == "quality" else CODE_SUFFIX_CONSISTENCY
-    human = identity is not None and is_human_entity(identity.entity_type)
     out = []
     for c in codes:
-        if human and c in HUMAN_CODE_SUFFIX_CONSISTENCY:
-            out.append(HUMAN_CODE_SUFFIX_CONSISTENCY[c])
-            continue
-        if human and c in _PET_ONLY_CONSISTENCY_CODES:
-            continue
         if c in tbl:
             out.append(tbl[c])
     if not out and failure_source == "consistency":
@@ -350,52 +308,25 @@ class RegenerationManager:
                     if failure_source == "quality"
                     else failure_codes_consistency(issues)
                 )
-                suffixes = prompt_suffix_for_codes(
-                    codes,
-                    failure_source=failure_source,
-                    identity=ctx.identity_profile,
+                suffixes = prompt_suffix_for_codes(codes, failure_source=failure_source)
+                prompt = prompt_builder.build_prompt(
+                    item,
+                    theme=ctx.theme,
+                    series_name=ctx.series_name,
+                    profile=ctx.profile,
+                    reference_description=ctx.reference_note,
+                    regeneration_suffixes=suffixes,
+                    no_ai_text=ctx.no_ai_text,
+                    reference_type=ctx.reference_type,
+                    canonical_identity_mode=ctx.canonical_identity_mode,
+                    canonical_sheet_mode=ctx.canonical_sheet_mode,
+                    character_art_direct_canonical=ctx.character_art_direct_canonical,
+                    series_pack_coherence=ctx.series_pack_coherence,
+                    style_intensity=ctx.style_intensity,
+                    pose_variation_strength=ctx.pose_variation_strength,
+                    expression_strength=ctx.expression_strength,
+                    force_identity_lock=True,
                 )
-                reg_suffix = "; ".join(s.strip() for s in suffixes if str(s).strip())
-                neg_prompt: str | None = None
-                if ctx.identity_profile is not None:
-                    built = prompt_builder.build_cut(
-                        item,
-                        engine=ctx.emoticon_engine,
-                        theme=ctx.theme,
-                        series_name=ctx.series_name,
-                        profile=ctx.profile,
-                        identity_profile=ctx.identity_profile,
-                        reference_description=ctx.reference_note,
-                        reference_type=ctx.reference_type,
-                        source_mode=ctx.source_mode,
-                        output_mode=ctx.output_mode,
-                        no_ai_text=ctx.no_ai_text,
-                        regeneration_suffix=reg_suffix,
-                    )
-                    prompt = built.primary_text
-                    neg_prompt = built.negative or None
-                else:
-                    prompt = prompt_builder.build_prompt(
-                        item,
-                        theme=ctx.theme,
-                        series_name=ctx.series_name,
-                        profile=ctx.profile,
-                        reference_description=ctx.reference_note,
-                        regeneration_suffixes=suffixes,
-                        no_ai_text=ctx.no_ai_text,
-                        reference_type=ctx.reference_type,
-                        canonical_identity_mode=ctx.canonical_identity_mode,
-                        canonical_sheet_mode=ctx.canonical_sheet_mode,
-                        character_art_direct_canonical=ctx.character_art_direct_canonical,
-                        series_pack_coherence=ctx.series_pack_coherence,
-                        style_intensity=ctx.style_intensity,
-                        pose_variation_strength=ctx.pose_variation_strength,
-                        expression_strength=ctx.expression_strength,
-                        force_identity_lock=True,
-                        engine=ctx.emoticon_engine,
-                        source_mode=ctx.source_mode,
-                        output_mode=ctx.output_mode,
-                    )
                 txt = str(item.get("text", ""))
 
                 raw_png = ctx.png_dir / f"{cut_id}.png"
@@ -429,18 +360,13 @@ class RegenerationManager:
 
                 gen_t = time.perf_counter()
                 try:
-                    gen_kw: dict[str, object] = {
-                        "reference_path": ctx.canonical_character_ref,
-                        "item": {**item, "_no_ai_text": ctx.no_ai_text},
-                    }
-                    if neg_prompt:
-                        gen_kw["negative_prompt"] = neg_prompt
                     generator.generate(
                         prompt,
                         raw_png,
                         text=txt,
                         item_id=cut_id,
-                        **gen_kw,
+                        reference_path=ctx.canonical_character_ref,
+                        item={**item, "_no_ai_text": ctx.no_ai_text},
                     )
                     if (
                         ctx.text_pipeline

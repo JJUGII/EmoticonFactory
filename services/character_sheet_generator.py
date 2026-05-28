@@ -64,9 +64,7 @@ class MockCharacterSheetGenerator(BaseCharacterSheetGenerator):
         char_dir.mkdir(parents=True, exist_ok=True)
         out_path = char_dir / SHEET_FILENAME
 
-        from services.image_io import pil_open_image
-
-        base = pil_open_image(photo_path).convert("RGBA")
+        base = Image.open(photo_path).convert("RGBA")
         base.thumbnail((420, 420), Image.Resampling.LANCZOS)
 
         sheet_w, sheet_h = 1200, 720

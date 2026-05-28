@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -50,9 +51,8 @@ class CanonicalCharacterManager:
         if not src.is_file():
             raise FileNotFoundError(str(src))
         dest = cls.canonical_path(package_dir)
-        from services.canonical_reuse import safe_copy_file
-
-        safe_copy_file(src, dest, log_same_file=True)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
         policy = str(metadata.get("policy") or "").strip()
         if not policy:
             policy = (

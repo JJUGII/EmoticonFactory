@@ -10,18 +10,9 @@ type Props = {
   cuts: Cut[];
   onRestart: () => void;
   onReselect: () => void;
-  onRegenerateEmoticons?: () => void;
-  regenerating?: boolean;
 };
 
-export function StepResult({
-  jobId,
-  cuts,
-  onRestart,
-  onReselect,
-  onRegenerateEmoticons,
-  regenerating = false,
-}: Props) {
+export function StepResult({ jobId, cuts, onRestart, onReselect }: Props) {
   const saveAll = () => {
     window.open(downloadZipUrl(jobId), "_blank");
   };
@@ -57,16 +48,6 @@ export function StepResult({
       </motion.div>
 
       <div className="space-y-3 rounded-2xl bg-white/80 p-4 shadow-card">
-        {onRegenerateEmoticons && (
-          <button
-            type="button"
-            onClick={onRegenerateEmoticons}
-            disabled={regenerating}
-            className="w-full rounded-xl bg-kakao-mint py-3 font-bold text-kakao-brown disabled:opacity-50"
-          >
-            {regenerating ? "16컷 재생성 중…" : "캐릭터 유지하고 16컷만 다시 생성"}
-          </button>
-        )}
         <button
           type="button"
           onClick={saveAll}

@@ -1,0 +1,29 @@
+# dependencies / build
+node_modules/
+.next/
+out/
+dist/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# secrets & local
+.env
+.env.local
+.env.*.local
+
+# runtime data
+web/jobs/*
+!web/jobs/.gitkeep
+outputs/
+*.log
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

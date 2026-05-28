@@ -18,8 +18,6 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from utils.files import is_junk_filename, is_valid_image_file, warn_skip_file
-
 
 class ImageReadError(OSError):
     """Failed to read an image from disk."""
@@ -46,9 +44,6 @@ def _as_path(path: Path | str) -> Path:
 def cv_imread(path: Path | str, flags: int = cv2.IMREAD_UNCHANGED) -> np.ndarray:
     """Read an image like ``cv2.imread`` but safe for Unicode paths (Windows)."""
     p = _as_path(path).resolve()
-    if is_junk_filename(p.name):
-        warn_skip_file(p, "AppleDouble/hidden file")
-        raise ImageReadError(p, "AppleDouble 또는 숨김 메타파일입니다")
     if not p.is_file():
         raise ImageReadError(p, "이미지 파일이 없습니다.")
     try:
@@ -88,30 +83,18 @@ def cv_imwrite(
 def pil_open_image(path: Path | str) -> Image.Image:
     """Open an image fully into memory (first frame / static)."""
     p = _as_path(path).resolve()
-    if is_junk_filename(p.name):
-        warn_skip_file(p, "AppleDouble/hidden file")
-        raise ImageReadError(p, "AppleDouble 또는 숨김 메타파일입니다")
     if not p.is_file():
         raise ImageReadError(p, "이미지 파일이 없습니다.")
-    try:
-        if p.stat().st_size < 1:
-            raise ImageReadError(p, "파일이 비어 있습니다.")
-    except OSError as exc:
-        raise ImageReadError(p, f"파일 정보 읽기 실패: {exc}") from exc
     try:
         data = p.read_bytes()
     except OSError as exc:
         raise ImageReadError(p, f"바이너리 읽기 실패: {exc}") from exc
-    if not data:
-        raise ImageReadError(p, "파일이 비어 있습니다.")
     try:
         bio = io.BytesIO(data)
         im = Image.open(bio)
         im.load()
     except OSError as exc:
         raise ImageReadError(p, f"Pillow Image.open 실패: {exc}") from exc
-    except Exception as exc:
-        raise ImageReadError(p, f"이미지 형식을 인식할 수 없습니다: {exc}") from exc
     return im
 
 
@@ -119,9 +102,6 @@ def pil_open_image(path: Path | str) -> Image.Image:
 def pil_open_buffer(path: Path | str) -> Iterator[Image.Image]:
     """Open from memory for inspection (supports ``n_frames`` / ``seek``). Caller must finish inside ``with``."""
     p = _as_path(path).resolve()
-    if is_junk_filename(p.name):
-        warn_skip_file(p, "AppleDouble/hidden file")
-        raise ImageReadError(p, "AppleDouble 또는 숨김 메타파일입니다")
     if not p.is_file():
         raise ImageReadError(p, "이미지 파일이 없습니다.")
     try:

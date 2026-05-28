@@ -10,7 +10,6 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from factory_web.config import ALLOWED_UPLOAD_EXT, DEFAULT_EMOTIONS, MAX_UPLOAD_BYTES
-from factory_web.config import FACTORY_ROOT
 from factory_web.models import (
     CandidatesResponse,
     CandidateItem,
@@ -18,7 +17,6 @@ from factory_web.models import (
     EmotionsDefaultsResponse,
     GenerateCandidatesRequest,
     GenerateEmoticonsRequest,
-    RegenerateEmoticonsRequest,
     JobStatusResponse,
     ResultResponse,
     SelectCandidateRequest,
@@ -26,18 +24,6 @@ from factory_web.models import (
 )
 from factory_web.services.job_store import JobStore
 from factory_web.services.pipeline_service import PipelineService
-from utils.files import cleanup_appledouble_in_dir, glob_image_files
-
-import sys
-
-if str(FACTORY_ROOT) not in sys.path:
-    sys.path.insert(0, str(FACTORY_ROOT))
-
-from services.generator_config import (  # noqa: E402
-    load_generator_settings,
-    resolve_candidate_generator,
-    resolve_emoticon_generator,
-)
 
 router = APIRouter(prefix="/api")
 store = JobStore()
@@ -62,9 +48,6 @@ def _job_status(doc: dict) -> JobStatusResponse:
         cuts=cuts,
         error=doc.get("error"),
         log_tail=doc.get("log_tail"),
-        generator_used=doc.get("generator_used"),
-        generator_candidate=doc.get("generator_candidate"),
-        generator_emoticon=doc.get("generator_emoticon"),
     )
 
 
@@ -78,7 +61,7 @@ async def upload(
     file: UploadFile = File(...),
     series_name: str = Form(""),
     theme: str = Form("사랑"),
-    generator: str = Form(""),
+    generator: str = Form("mock"),
 ) -> UploadResponse:
     ext = Path(file.filename or "").suffix.lower()
     if not ext:
@@ -102,25 +85,12 @@ async def upload(
     safe_name = f"photo{ext if ext else '.png'}"
     dest = store.upload_path(job_id, safe_name)
     dest.write_bytes(raw)
-    upload_dir = dest.parent
-    cleanup_appledouble_in_dir(upload_dir)
-    # exFAT: macOS may create ._photo.png immediately after photo.png
-    for junk in upload_dir.iterdir():
-        if junk.is_file() and junk.name.startswith("._"):
-            try:
-                junk.unlink()
-            except OSError:
-                pass
-    emo = resolve_emoticon_generator(generator)
-    cand = resolve_candidate_generator(generator)
     store.update(
         job_id,
         phase="uploaded",
         progress=10,
         message="사진이 업로드되었습니다.",
-        generator=emo,
-        generator_candidate=cand,
-        generator_emoticon=emo,
+        generator=generator.strip() or "mock",
         theme=theme,
     )
     return UploadResponse(
@@ -136,16 +106,17 @@ def generate_candidates(body: GenerateCandidatesRequest) -> JobStatusResponse:
         store.load(body.job_id)
     except FileNotFoundError as exc:
         raise HTTPException(404, detail=str(exc)) from exc
-    cand_gen = resolve_candidate_generator(body.generator)
+    art_style = str(body.art_style or "illustration").strip().lower()
+    if art_style not in ("illustration", "realistic"):
+        art_style = "illustration"
     store.update(
         body.job_id,
-        generator_candidate=cand_gen,
+        generator=body.generator,
         theme=body.theme,
         species_hint=body.species_hint,
+        art_style=art_style,
     )
-    up = store.job_dir(body.job_id) / "uploads"
-    cleanup_appledouble_in_dir(up)
-    pipeline.run_candidates_async(body.job_id, generator=cand_gen)
+    pipeline.run_candidates_async(body.job_id, generator=body.generator)
     return _job_status(store.load(body.job_id))
 
 
@@ -168,80 +139,21 @@ def generate_emoticons(body: GenerateEmoticonsRequest) -> JobStatusResponse:
         job = store.load(body.job_id)
     except FileNotFoundError as exc:
         raise HTTPException(404, detail=str(exc)) from exc
-    if not job.get("selected_candidate") and not body.reuse_character:
+    if not job.get("selected_candidate"):
         raise HTTPException(400, detail="먼저 후보 캐릭터를 선택하세요.")
-    if body.reuse_character and not pipeline.has_canonical(job):
-        raise HTTPException(
-            400,
-            detail="재사용할 canonical_character.png 가 없습니다. 먼저 후보를 선택하세요.",
-        )
-    emo_gen = resolve_emoticon_generator(
-        (body.generator or "").strip() or str(job.get("generator_emoticon") or "")
-    )
-    upd: dict[str, object] = {
-        "generator": emo_gen,
-        "generator_emoticon": emo_gen,
-        "generator_used": emo_gen,
-        "theme": body.theme,
-        "species_hint": body.species_hint,
-        "emotions": list(body.emotions),
-    }
-    sm = (body.source_mode or "").strip().lower()
-    om = (body.output_mode or "").strip().lower()
-    if sm in ("photo", "illustration", "character", "auto"):
-        upd["source_mode"] = sm
-    if om in ("sticker", "illustration"):
-        upd["output_mode"] = om
-    upd["reuse_character"] = bool(body.reuse_character)
-    store.update(body.job_id, **upd)
-    pipeline.run_emoticons_async(
+    art_style_e = str(body.art_style or "illustration").strip().lower()
+    if art_style_e not in ("illustration", "realistic"):
+        art_style_e = "illustration"
+    store.update(
         body.job_id,
-        list(body.emotions),
-        reuse_character=bool(body.reuse_character),
+        generator=body.generator,
+        theme=body.theme,
+        species_hint=body.species_hint,
+        emotions=list(body.emotions),
+        grid_mode=bool(body.grid_mode),
+        art_style=art_style_e,
     )
-    status = _job_status(store.load(body.job_id))
-    return status
-
-
-@router.post("/regenerate-emoticons", response_model=JobStatusResponse)
-def regenerate_emoticons(body: RegenerateEmoticonsRequest) -> JobStatusResponse:
-    """Reuse canonical character; skip GPT candidates; re-run Comfy 16-cut only."""
-    try:
-        job = store.load(body.job_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(404, detail=str(exc)) from exc
-    if not pipeline.has_canonical(body.job_id):
-        raise HTTPException(
-            400,
-            detail="canonical_character.png 가 없습니다. 먼저 후보를 선택하세요.",
-        )
-    emotions = list(body.emotions) if body.emotions else list(job.get("emotions") or [])
-    if len(emotions) != 16:
-        from factory_web.config import DEFAULT_EMOTIONS
-
-        emotions = list(DEFAULT_EMOTIONS)[:16]
-    emo_gen = resolve_emoticon_generator(
-        (body.generator or "").strip() or str(job.get("generator_emoticon") or "")
-    )
-    upd: dict[str, object] = {
-        "generator": emo_gen,
-        "generator_emoticon": emo_gen,
-        "generator_used": emo_gen,
-        "reuse_character": True,
-        "error": None,
-    }
-    if body.theme.strip():
-        upd["theme"] = body.theme.strip()
-    if body.species_hint.strip():
-        upd["species_hint"] = body.species_hint.strip()
-    sm = (body.source_mode or "").strip().lower()
-    om = (body.output_mode or "").strip().lower()
-    if sm in ("photo", "illustration", "character", "auto"):
-        upd["source_mode"] = sm
-    if om in ("sticker", "illustration"):
-        upd["output_mode"] = om
-    store.update(body.job_id, **upd)
-    pipeline.run_emoticons_async(body.job_id, emotions, reuse_character=True)
+    pipeline.run_emoticons_async(body.job_id, list(body.emotions))
     return _job_status(store.load(body.job_id))
 
 
@@ -304,7 +216,6 @@ def get_result(job_id: str) -> ResultResponse:
         preview=pipeline.build_preview_payload(job_id),
         cuts=cuts,
         canonical_url=canon_url,
-        generator_used=doc.get("generator_used") or doc.get("generator_emoticon"),
     )
 
 
@@ -320,7 +231,7 @@ def list_candidates(job_id: str) -> CandidatesResponse:
     pkg = Path(pkg_s)
     cand_dir = pkg / "character_candidates"
     items: list[CandidateItem] = []
-    for p in glob_image_files(cand_dir, "candidate_*.png"):
+    for p in sorted(cand_dir.glob("candidate_*.png")):
         idx = int(p.stem.split("_")[-1])
         items.append(
             CandidateItem(
@@ -345,7 +256,7 @@ def download_zip(job_id: str) -> StreamingResponse:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         if sticker.is_dir():
-            for png in glob_image_files(sticker, "*.png"):
+            for png in sorted(sticker.glob("*.png")):
                 zf.write(png, arcname=f"emoticons/{png.name}")
         canon = pkg / "character" / "canonical_character.png"
         if canon.is_file():

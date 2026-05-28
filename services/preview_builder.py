@@ -266,13 +266,7 @@ def _pipeline_flow_banner_html(
     ]
     cells: list[str] = []
     for label, p in steps:
-        from utils.files import glob_image_files, is_valid_image_file
-
-        ok = (
-            p.is_dir() and bool(glob_image_files(p, "*.png"))
-            if p.name != "reference.png"
-            else is_valid_image_file(p)
-        )
+        ok = p.is_dir() and any(p.glob("*.png")) if p.name != "reference.png" else p.is_file()
         if label.startswith("3"):
             ok = canonical_used and (package_dir / "character" / "canonical_character.png").is_file()
         if label.startswith("4"):

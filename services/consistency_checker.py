@@ -554,14 +554,9 @@ def _perceptual_hash_similarity(path_a: Path, path_b: Path) -> float | None:
         from PIL import Image
     except ImportError:
         return None
-    from services.image_io import pil_open_image
-    from utils.files import is_valid_image_file
-
-    if not is_valid_image_file(path_a) or not is_valid_image_file(path_b):
-        return None
     try:
-        a = pil_open_image(path_a).convert("RGB")
-        b = pil_open_image(path_b).convert("RGB")
+        a = Image.open(path_a).convert("RGB")
+        b = Image.open(path_b).convert("RGB")
         ha = imagehash.phash(a, hash_size=12)
         hb = imagehash.phash(b, hash_size=12)
         dist = float(ha - hb)
@@ -747,9 +742,7 @@ def copy_failed_consistency(
     dest = package_dir / "failed_consistency"
     dest.mkdir(parents=True, exist_ok=True)
     # Clear previous copies (same stem)
-    from utils.files import glob_image_files
-
-    for old in glob_image_files(dest, "*.png"):
+    for old in dest.glob("*.png"):
         try:
             old.unlink()
         except OSError:

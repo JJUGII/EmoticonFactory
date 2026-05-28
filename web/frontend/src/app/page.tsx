@@ -16,7 +16,6 @@ import {
   generateCandidates,
   generateEmoticons,
   pollJob,
-  regenerateEmoticons,
   selectCandidate,
   uploadPhoto,
   type CandidateItem,
@@ -35,7 +34,10 @@ export default function HomePage() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [generator, setGenerator] = useState("mock");
+  const [generator] = useState("openai");
+  const [gridMode, setGridMode] = useState(false);
+  const [artStyle, setArtStyle] = useState<"illustration" | "realistic">("illustration");
+  const [speciesHint, setSpeciesHint] = useState("");
   const [loading, setLoading] = useState(false);
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
   const [candidates, setCandidates] = useState<CandidateItem[]>([]);
@@ -83,7 +85,7 @@ export default function HomePage() {
 
     setLoading(true);
     try {
-      const res = await uploadPhoto(file, { generator });
+      const res = await uploadPhoto(file, { generator: "openai" });
       setJobId(res.job_id);
     } catch (e) {
       console.error("[UPLOAD_ERROR]", e);
@@ -101,7 +103,7 @@ export default function HomePage() {
     setLoading(true);
     setCandidates([]);
     try {
-      await generateCandidates(jobId, generator);
+      await generateCandidates(jobId, generator, speciesHint, artStyle);
       stopPollRef.current?.();
       stopPollRef.current = pollJob(
         jobId,
@@ -139,44 +141,12 @@ export default function HomePage() {
     }
   };
 
-  const onRegenerateEmoticonsOnly = async () => {
-    if (!jobId) return;
-    setStep(4);
-    setLoading(true);
-    try {
-      const initial = await regenerateEmoticons(jobId, { emotions });
-      setJobStatus(initial);
-      stopPollRef.current?.();
-      stopPollRef.current = pollJob(
-        jobId,
-        async (s) => {
-          setJobStatus(s);
-          if (s.phase === "completed") {
-            const result = await fetchResult(jobId);
-            setResultCuts(result.cuts);
-            setStep(5);
-            setLoading(false);
-          }
-          if (s.phase === "failed") {
-            setLoading(false);
-            alert(s.error || "재생성 실패");
-          }
-        },
-        2000,
-        ["completed", "failed"]
-      );
-    } catch (e) {
-      setLoading(false);
-      alert(e instanceof Error ? e.message : "요청 실패");
-    }
-  };
-
   const onGenerateEmoticons = async () => {
     if (!jobId) return;
     setStep(4);
     setLoading(true);
     try {
-      const initial = await generateEmoticons(jobId, emotions);
+      const initial = await generateEmoticons(jobId, emotions, generator, gridMode, artStyle);
       setJobStatus(initial);
       stopPollRef.current?.();
       stopPollRef.current = pollJob(
@@ -252,8 +222,12 @@ export default function HomePage() {
               uploading={loading}
               onFile={onUpload}
               onFileError={setUploadError}
-              generator={generator}
-              onGeneratorChange={setGenerator}
+              artStyle={artStyle}
+              onArtStyleChange={setArtStyle}
+              gridMode={gridMode}
+              onGridModeChange={setGridMode}
+              speciesHint={speciesHint}
+              onSpeciesHintChange={setSpeciesHint}
             />
           </motion.div>
         )}
@@ -293,8 +267,6 @@ export default function HomePage() {
                 setStep(2);
                 setSelectedCandidate(null);
               }}
-              onRegenerateEmoticons={onRegenerateEmoticonsOnly}
-              regenerating={loading}
             />
           </motion.div>
         )}

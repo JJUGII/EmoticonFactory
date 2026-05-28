@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Callable
 
 from config import PROJECT_ROOT
-from utils.files import is_valid_image_file, resolve_upload_character_path
 
 _APP = PROJECT_ROOT / "app.py"
 
@@ -32,40 +31,13 @@ def _emit(line: str, sink: Callable[[str], None] | None) -> None:
         sink(line.rstrip("\n"))
 
 
-def _character_arg_from_argv(argv: list[str]) -> str:
-    if "--character" in argv:
-        return argv[argv.index("--character") + 1]
-    return ""
-
-
-def _build_subprocess_env() -> dict[str, str]:
-    """Merge parent env + project ``.env`` so ``app.py`` subprocess gets API keys."""
-    from dotenv import dotenv_values, load_dotenv
-
-    env_path = PROJECT_ROOT / ".env"
-    if env_path.is_file():
-        load_dotenv(env_path, override=False)
-    env = os.environ.copy()
-    if env_path.is_file():
-        for key, val in (dotenv_values(env_path) or {}).items():
-            if val is not None:
-                env[key] = str(val)
-    env["FACTORY_ROOT"] = str(PROJECT_ROOT.resolve())
-    key = (env.get("OPENAI_API_KEY") or "").strip()
-    print(
-        f"[ENV] subprocess OPENAI_API_KEY present: {str(bool(key)).lower()}",
-        file=sys.stderr,
-    )
-    return env
-
-
 def _run_app(
     argv: list[str],
     *,
     cwd: Path,
     log: Callable[[str], None] | None = None,
 ) -> tuple[int, str]:
-    env = _build_subprocess_env()
+    env = os.environ.copy()
     proc = subprocess.Popen(
         argv,
         cwd=str(cwd),
@@ -127,9 +99,8 @@ class PipelineOptions:
     cut_templates: str | None = None
     candidate_openai_model: str = "gpt-image-1"
     candidate_openai_mode: str = "auto"
-    source_mode: str = "auto"
-    output_mode: str = ""
-    reuse_character: bool = False
+    grid_mode: bool = False
+    art_style: str = "illustration"  # "illustration" | "realistic"
 
 
 @dataclass
@@ -152,26 +123,13 @@ class PipelineRunner:
     def __init__(self, *, project_root: Path | None = None) -> None:
         self.root = Path(project_root) if project_root else PROJECT_ROOT
 
-    def _resolved_character_path(self, raw: str) -> str:
-        resolved = resolve_upload_character_path(Path(raw), verify=True)
-        return str(resolved.resolve())
-
-    def build_argv(self, options: PipelineOptions) -> list[str]:
-        """Build subprocess argv with sanitized ``--character`` (never ``._*``)."""
-        od = {**options.__dict__}
-        od["character_path"] = self._resolved_character_path(options.character_path)
-        return self._base_argv(PipelineOptions(**od))
-
     def _base_argv(self, options: PipelineOptions) -> list[str]:
-        char = options.character_path
-        if not is_valid_image_file(char, verify=False):
-            char = self._resolved_character_path(char)
         exe = sys.executable
         argv: list[str] = [
             exe,
             str(self.root / "app.py"),
             "--character",
-            char,
+            options.character_path,
             "--series",
             options.series_name,
             "--theme",
@@ -246,14 +204,11 @@ class PipelineRunner:
                 "--candidate-openai-mode",
                 str(options.candidate_openai_mode).strip().lower(),
             ]
-        sm = (getattr(options, "source_mode", None) or "").strip().lower()
-        if sm in ("auto", "photo", "illustration", "character"):
-            argv += ["--source-mode", sm]
-        om = (getattr(options, "output_mode", None) or "").strip().lower()
-        if om in ("sticker", "illustration"):
-            argv += ["--output-mode", om]
-        if getattr(options, "reuse_character", False):
-            argv.append("--reuse-character")
+        if getattr(options, "grid_mode", False):
+            argv.append("--grid-mode")
+        art_style = str(getattr(options, "art_style", "illustration")).strip().lower()
+        if art_style == "realistic":
+            argv += ["--art-style", "realistic"]
         return argv
 
     def _package_dir(self, options: PipelineOptions) -> Path:
@@ -269,15 +224,7 @@ class PipelineRunner:
         log: Callable[[str], None] | None = None,
     ) -> CandidateResult:
         opts = PipelineOptions(**{**options.__dict__, "make_candidates": True})
-        argv = self.build_argv(opts)
-        char_arg = _character_arg_from_argv(argv)
-        _emit(f"[PIPELINE] character_path={char_arg}", log)
-        _emit(
-            f"[PIPELINE] is_valid_image_file={is_valid_image_file(char_arg, verify=True)}",
-            log,
-        )
-        _emit(f"[PIPELINE] command={' '.join(argv)}", log)
-        rc, out = _run_app(argv, cwd=self.root, log=log)
+        rc, out = _run_app(self._base_argv(opts), cwd=self.root, log=log)
         tail = out[-8000:] if out else ""
         return CandidateResult(returncode=rc, package_dir=self._package_dir(options), stdout_tail=tail)
 
@@ -299,8 +246,7 @@ class PipelineRunner:
             "select_candidate": None,
         }
         opts = PipelineOptions(**od)
-        argv = self.build_argv(opts)
-        rc, out = _run_app(argv, cwd=self.root, log=log)
+        rc, out = _run_app(self._base_argv(opts), cwd=self.root, log=log)
         tail = out[-8000:] if out else ""
         return CandidateResult(returncode=rc, package_dir=self._package_dir(options), stdout_tail=tail)
 
@@ -314,22 +260,8 @@ class PipelineRunner:
         # TODO: import app.main(argv) directly for in-process runs (no subprocess).
         od = {**options.__dict__, "make_candidates": False}
         if canonical_character_path:
-            od["canonical_character"] = str(canonical_character_path)
-        if od.get("reuse_character") and canonical_character_path:
-            od["canonical_character"] = str(canonical_character_path)
+            od["canonical_character"] = canonical_character_path
         opts = PipelineOptions(**od)
-        argv = self.build_argv(opts)
-        char_arg = _character_arg_from_argv(argv)
-        gen_arg = opts.generator
-        if "--generator" in argv:
-            gen_arg = argv[argv.index("--generator") + 1]
-        _emit(f"[PIPELINE] selected_generator={gen_arg}", log)
-        _emit(f"[PIPELINE] character_path={char_arg}", log)
-        _emit(
-            f"[PIPELINE] is_valid_image_file={is_valid_image_file(char_arg, verify=True)}",
-            log,
-        )
-        _emit(f"[PIPELINE] command={' '.join(argv)}", log)
-        rc, out = _run_app(argv, cwd=self.root, log=log)
+        rc, out = _run_app(self._base_argv(opts), cwd=self.root, log=log)
         tail = out[-8000:] if out else ""
         return PipelineResult(returncode=rc, package_dir=self._package_dir(options), stdout_tail=tail)

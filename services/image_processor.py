@@ -19,7 +19,6 @@ from config import (
     SHARE_SIZE,
 )
 from services.image_io import pil_open_image, pil_save_image
-from services.text_renderer import render_text_overlay
 
 
 def draw_text_with_white_outline(
@@ -85,31 +84,89 @@ class ImageProcessor:
         stroke_fill: tuple[int, int, int, int] = (255, 255, 240, 255),
         stroke_width: int = 6,
     ) -> Path:
-        """Draw Korean caption via ``text_renderer`` (Pretendard Bold, outline + shadow)."""
-        return render_text_overlay(
-            image_path,
-            output_path,
-            text,
-            position,
-            canvas_size=canvas_size or self.emoticon_size,
-            font_path=font_path,
-            fill=fill,
-            stroke_fill=stroke_fill,
-            stroke_width=stroke_width,
-        )
+        """Draw Korean caption with thick outline; safe margins inside ``canvas_size``."""
+        cw, ch = canvas_size or self.emoticon_size
+        im = pil_open_image(image_path).convert("RGBA")
+        if im.size != (cw, ch):
+            im = im.resize((cw, ch), Image.Resampling.LANCZOS)
+        draw = ImageDraw.Draw(im)
+        pos = (position or "bottom").strip().lower()
+        if pos == "none" or not (text or "").strip():
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            self._save_png_under_limit(im, output_path, MAX_EMOTICON_BYTES)
+            return output_path
+
+        t = str(text).strip()
+        font = self._overlay_font(font_path, 56)
+
+        def try_font(sz: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+            return self._overlay_font(font_path, sz)
+
+        font_size = 56
+        margin_x = 24
+        max_w = cw - 2 * margin_x
+        font = try_font(font_size)
+        bbox = draw.textbbox((0, 0), t, font=font, anchor="mm")
+        tw = bbox[2] - bbox[0]
+        while tw > max_w and font_size > 16:
+            font_size -= 2
+            font = try_font(font_size)
+            bbox = draw.textbbox((0, 0), t, font=font, anchor="mm")
+            tw = bbox[2] - bbox[0]
+
+        if pos == "top":
+            cx, cy = cw // 2, 72
+        elif pos == "left":
+            cx, cy = int(cw * 0.22), ch // 2
+        elif pos == "right":
+            cx, cy = int(cw * 0.78), ch // 2
+        else:
+            cx, cy = cw // 2, int(ch - 95)
+
+        try:
+            draw.text(
+                (cx, cy),
+                t,
+                font=font,
+                fill=fill,
+                anchor="mm",
+                stroke_width=stroke_width,
+                stroke_fill=stroke_fill,
+            )
+        except TypeError:
+            for dx in range(-stroke_width, stroke_width + 1):
+                for dy in range(-stroke_width, stroke_width + 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    draw.text((cx + dx, cy + dy), t, font=font, fill=stroke_fill, anchor="mm")
+            draw.text((cx, cy), t, font=font, fill=fill, anchor="mm")
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._save_png_under_limit(im, output_path, MAX_EMOTICON_BYTES)
+        return output_path
 
     def _overlay_font(
         self, font_path: Optional[Path], size: int
     ) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+        import sys as _sys
         paths: list[Path] = []
         if font_path is not None:
             paths.append(Path(font_path))
-        paths.extend(
-            [
+        if _sys.platform == "darwin":
+            paths.extend([
+                Path("/System/Library/Fonts/AppleSDGothicNeo.ttc"),
+                Path("/System/Library/Fonts/Supplemental/AppleGothic.ttf"),
+            ])
+        elif _sys.platform == "win32":
+            paths.extend([
                 Path(r"C:\Windows\Fonts\malgunbd.ttf"),
                 Path(r"C:\Windows\Fonts\malgun.ttf"),
-            ]
-        )
+            ])
+        else:
+            paths.extend([
+                Path("/usr/share/fonts/truetype/nanum/NanumGothic.ttf"),
+                Path("/usr/share/fonts/nanum/NanumGothic.ttf"),
+            ])
         for p in paths:
             if p.is_file():
                 try:
@@ -170,7 +227,20 @@ class ImageProcessor:
         return output_path
 
     def _font(self, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-        for name in ("malgun.ttf", "Malgun.ttf", "arial.ttf", "Arial.ttf"):
+        import sys as _sys
+        if _sys.platform == "darwin":
+            platform_fonts: tuple[str, ...] = (
+                "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+                "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
+            )
+        elif _sys.platform == "win32":
+            platform_fonts = ("malgun.ttf", "Malgun.ttf")
+        else:
+            platform_fonts = (
+                "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+                "/usr/share/fonts/nanum/NanumGothic.ttf",
+            )
+        for name in (*platform_fonts, "arial.ttf", "Arial.ttf"):
             try:
                 return ImageFont.truetype(name, size=size)
             except OSError:

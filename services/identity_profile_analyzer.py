@@ -132,7 +132,6 @@ def _infer_entity_type(
         return "character_art", 0.92, ["reference_type=character_art"]
 
     sh = str(species_hint or "").strip().lower()
-    pet_hints = frozenset({"cat", "dog", "rabbit", "hamster", "bird"})
     if sh in _SPECIES_HINT_MAP:
         et = _SPECIES_HINT_MAP[sh]
         return et, 0.88, [f"species_hint={sh}"]
@@ -142,23 +141,12 @@ def _infer_entity_type(
     eye_d = metrics.get("eye_density", 0.0)
     head_d = metrics.get("head_density", 0.0)
 
-    if rt == "photo":
-        if skin > 0.32 and sh not in pet_hints:
-            if sh == "baby":
-                reasons.append("photo + species_hint=baby")
-                return "baby", 0.78, reasons
-            reasons.append("reference_type=photo with human skin tones → human")
-            return "human", 0.78, reasons
-        if sh in pet_hints:
-            reasons.append(f"photo + species_hint={sh}")
-            return sh, 0.82, reasons  # type: ignore[return-value]
-
-    if skin > 0.38 and aspect < 0.95 and sh == "baby":
-        reasons.append("skin tone + baby hint → baby")
-        return "baby", 0.72, reasons
-    if skin > 0.38 and aspect < 0.95 and sh not in pet_hints:
+    if skin > 0.38 and aspect < 0.95:
+        if eye_d > 0.42 and head_d > 0.55:
+            reasons.append("high skin tone + large eye/head region → baby")
+            return "baby", 0.62, reasons
         reasons.append("skin-tone dominant foreground → human")
-        return "human", 0.68, reasons
+        return "human", 0.65, reasons
 
     if aspect > 1.15 and eye_d < 0.35:
         reasons.append("wide aspect, moderate eye band → dog-like silhouette")
@@ -170,11 +158,8 @@ def _infer_entity_type(
         reasons.append("very wide bbox → bird or small pet")
         return "bird", 0.45, reasons
 
-    if rt == "photo":
-        reasons.append("photo reference default → human (identity-preserving)")
-        return "human", 0.52, reasons
     reasons.append("could not assert species; preserving reference identity only")
-    return "unknown", 0.4, reasons
+    return "pet", 0.4, reasons
 
 
 def _trait_locks_for_entity(entity: EntityType, metrics: dict[str, float]) -> TraitLocks:
@@ -200,10 +185,7 @@ def _trait_locks_for_entity(entity: EntityType, metrics: dict[str, float]) -> Tr
             "same eye size",
             "same eyelid shape",
         ]
-        locks.fur_pattern_lock = [
-            "skin tone from reference",
-            "clothing colors and hoodie/jacket/shirt impression",
-        ]
+        locks.fur_pattern_lock = ["n/a — use skin tone and clothing colors from reference"]
     elif entity == "baby":
         locks.species_trait_lock = ["same baby identity", "same age impression (infant/toddler)"]
         locks.facial_landmark_lock = [
@@ -294,19 +276,7 @@ class IdentityProfileAnalyzer:
             reference_type=reference_type,
             metrics=metrics,
         )
-        if path.is_file():
-            from services.prompts.human_descriptors import (
-                extract_human_palette,
-                is_human_entity,
-            )
-
-            colors = (
-                extract_human_palette(path, max_colors=5)
-                if is_human_entity(entity)
-                else _dominant_colors(path, max_colors=5)
-            )
-        else:
-            colors = []
+        colors = _dominant_colors(path, max_colors=5) if path.is_file() else []
 
         species = entity if entity not in ("character_art", "pet", "unknown", "couple", "family") else (
             str(species_hint or "unknown").strip().lower() or "unknown"
@@ -340,16 +310,13 @@ class IdentityProfileAnalyzer:
         if entity == "dog":
             eye_shape = "friendly round eyes matching reference"
 
-        if entity == "character_art":
-            hair_fur = "preserve illustrated hair, fur, or feather pattern exactly"
-        elif entity in ("human", "baby", "couple", "family"):
-            hair_fur = (
-                "preserve hairstyle, hair color, bangs/fringe, and outfit colors from reference"
-            )
-        else:
-            hair_fur = "preserve hair or fur pattern and face markings from reference"
+        hair_fur = (
+            "preserve illustrated hair, fur, or feather pattern exactly"
+            if entity == "character_art"
+            else "preserve hair or fur pattern and face markings from reference"
+        )
 
-        profile = IdentityProfile(
+        return IdentityProfile(
             entity_type=entity,
             species=species,
             face_shape=face_shape,
@@ -367,25 +334,6 @@ class IdentityProfileAnalyzer:
             reference_type_hint=reference_type,
             source_image=rel,
         )
-        if entity in ("human", "baby", "couple", "family") and path.is_file():
-            from services.prompts.human_descriptors import (
-                is_human_entity,
-                log_entity_profile_summary,
-                refine_human_identity_profile,
-            )
-
-            profile, human_desc, removed = refine_human_identity_profile(
-                profile,
-                path,
-                metrics=metrics,
-                override_species=(entity == "human"),
-            )
-            log_entity_profile_summary(
-                profile,
-                human_descriptors=human_desc,
-                removed_pet=removed,
-            )
-        return profile
 
     def to_pet_compatible_dict(self, profile: IdentityProfile) -> dict[str, Any]:
         """Bridge for legacy ``pet_profile`` fields in ``package_info``."""

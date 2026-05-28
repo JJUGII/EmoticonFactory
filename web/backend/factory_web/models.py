@@ -32,9 +32,10 @@ class UploadResponse(BaseModel):
 
 class GenerateCandidatesRequest(BaseModel):
     job_id: str
-    generator: str = ""
+    generator: str = "openai"
     species_hint: str = ""
     theme: str = "사랑"
+    art_style: str = "illustration"  # "illustration" | "realistic"
 
 
 class CandidateItem(BaseModel):
@@ -56,23 +57,11 @@ class SelectCandidateRequest(BaseModel):
 class GenerateEmoticonsRequest(BaseModel):
     job_id: str
     emotions: list[str] = Field(min_length=16, max_length=16)
-    generator: str = ""
+    generator: str = "openai"
     theme: str = "사랑"
     species_hint: str = ""
-    source_mode: str = ""  # photo | illustration | character | auto
-    output_mode: str = ""  # sticker | illustration
-    reuse_character: bool = False
-
-
-class RegenerateEmoticonsRequest(BaseModel):
-    job_id: str
-    reuse_character: bool = True
-    emotions: list[str] | None = None
-    generator: str = ""
-    theme: str = ""
-    species_hint: str = ""
-    source_mode: str = ""
-    output_mode: str = ""
+    grid_mode: bool = False
+    art_style: str = "illustration"  # "illustration" | "realistic"
 
 
 class CutProgressItem(BaseModel):
@@ -91,9 +80,6 @@ class JobStatusResponse(BaseModel):
     cuts: list[CutProgressItem] = Field(default_factory=list)
     error: str | None = None
     log_tail: str | None = None
-    generator_used: str | None = None
-    generator_candidate: str | None = None
-    generator_emoticon: str | None = None
 
 
 class ResultResponse(BaseModel):
@@ -102,7 +88,6 @@ class ResultResponse(BaseModel):
     preview: dict[str, Any] | None = None
     cuts: list[CutProgressItem]
     canonical_url: str | None = None
-    generator_used: str | None = None
 
 
 class EmotionsDefaultsResponse(BaseModel):

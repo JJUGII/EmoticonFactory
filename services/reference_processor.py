@@ -9,7 +9,6 @@ from PIL import Image
 
 from config import EMOTICON_SIZE
 from services.image_io import ImageReadError, pil_open_image, pil_save_image
-from utils.files import is_junk_filename, warn_skip_file
 
 
 class ReferenceProcessor:
@@ -37,17 +36,6 @@ class ReferenceProcessor:
 
         if not reference_path.is_file():
             warnings.append(f"참조 파일이 없습니다: {reference_path}")
-            return {
-                "warnings": warnings,
-                "paths": paths,
-                "character_base_absolute": None,
-            }
-
-        if is_junk_filename(reference_path.name):
-            warn_skip_file(reference_path, "AppleDouble/hidden file")
-            warnings.append(
-                f"참조 이미지가 AppleDouble/숨김 파일입니다: {reference_path.resolve()}"
-            )
             return {
                 "warnings": warnings,
                 "paths": paths,

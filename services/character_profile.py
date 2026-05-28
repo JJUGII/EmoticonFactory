@@ -107,15 +107,6 @@ class CharacterProfile(BaseModel):
     @classmethod
     def from_identity_profile(cls, identity: "IdentityProfile") -> "CharacterProfile":
         """Build profile from v0.7 universal identity (not generic mascot defaults)."""
-        from services.prompts.human_descriptors import (
-            human_character_profile_fields,
-            is_human_entity,
-        )
-
-        if is_human_entity(identity.entity_type):
-            fields = human_character_profile_fields(identity)
-            return cls(**fields)
-
         colors = ", ".join(identity.primary_palette) if identity.primary_palette else "from reference"
         tl = identity.trait_locks
         rules = (

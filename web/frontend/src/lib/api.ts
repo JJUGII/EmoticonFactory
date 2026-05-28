@@ -93,12 +93,20 @@ export async function uploadPhoto(
 
 export async function generateCandidates(
   jobId: string,
-  generator: string
+  generator: string,
+  speciesHint = "",
+  artStyle: "illustration" | "realistic" = "illustration"
 ): Promise<JobStatus> {
   const res = await fetch(apiUrl("/api/generate-candidates"), {
     method: "POST",
     headers: ngrokRequestHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ job_id: jobId, generator, theme: "사랑" }),
+    body: JSON.stringify({
+      job_id: jobId,
+      generator,
+      theme: "사랑",
+      species_hint: speciesHint,
+      art_style: artStyle,
+    }),
   });
   return parseJson(res);
 }
@@ -132,30 +140,12 @@ export async function fetchDefaultEmotions(): Promise<string[]> {
   return data.emotions;
 }
 
-export async function regenerateEmoticons(
-  jobId: string,
-  opts?: {
-    emotions?: string[];
-    generator?: string;
-    reuse_character?: boolean;
-  }
-): Promise<JobStatus> {
-  const res = await fetch(apiUrl("/api/regenerate-emoticons"), {
-    method: "POST",
-    headers: ngrokRequestHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({
-      job_id: jobId,
-      reuse_character: opts?.reuse_character ?? true,
-      emotions: opts?.emotions,
-      generator: opts?.generator ?? "",
-    }),
-  });
-  return parseJson(res);
-}
-
 export async function generateEmoticons(
   jobId: string,
-  emotions: string[]
+  emotions: string[],
+  generator: string,
+  gridMode = false,
+  artStyle: "illustration" | "realistic" = "illustration"
 ): Promise<JobStatus> {
   const res = await fetch(apiUrl("/api/generate-emoticons"), {
     method: "POST",
@@ -163,8 +153,10 @@ export async function generateEmoticons(
     body: JSON.stringify({
       job_id: jobId,
       emotions,
-      generator: "",
+      generator,
       theme: "사랑",
+      grid_mode: gridMode,
+      art_style: artStyle,
     }),
   });
   return parseJson(res);

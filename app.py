@@ -15,18 +15,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from config import OUTPUT_DIR, PROJECT_ROOT
-from utils.files import glob_image_files, resolve_upload_character_path
 from services.character_profile import CharacterProfile
 from services.pet_profile_analyzer import PET_PROFILE_SOURCE, PetProfileAnalyzer
 from services.consistency_checker import CharacterConsistencyChecker, copy_failed_consistency
 from services.concept_planner import ConceptPlanner
-from services.generator_config import (
-    load_generator_settings,
-    log_generator_phase,
-    candidate_generator_from_env,
-    resolve_cli_candidate_generator,
-    resolve_emoticon_generator,
-)
 from services.image_generator import OpenAIMissingKeyError, create_image_generator
 from services.image_processor import ImageProcessor
 from services.package_builder import (
@@ -36,15 +28,6 @@ from services.package_builder import (
     merge_package_info_sheet_fields,
 )
 from services.prompt_builder import PromptBuilder
-from services.prompts import (
-    build_entity_profile,
-    load_prompt_settings,
-    log_entity_resolution,
-    log_prompt_config,
-    log_prompt_for_cut,
-    resolve_output_mode,
-    resolve_source_mode,
-)
 from services.quality_checker import QualityChecker
 from services.reference_classifier import ReferenceClassification, ReferenceClassifier
 from services.reference_processor import ReferenceProcessor
@@ -166,7 +149,7 @@ def _warn_cut_generation_reference(
     mgr = CanonicalCharacterManager()
     canon = mgr.get_canonical_path(package_dir)
     cand_dir = package_dir / "character_candidates"
-    has_cands = cand_dir.is_dir() and bool(glob_image_files(cand_dir, "candidate_*.png"))
+    has_cands = cand_dir.is_dir() and any(cand_dir.glob("candidate_*.png"))
 
     if has_cands and canon is None:
         print(
@@ -363,18 +346,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--generator",
-        choices=("mock", "openai", "comfyui"),
+        choices=("mock", "openai"),
         default="mock",
-        help=(
-            "16컷 이모티콘 백엔드: mock | openai | comfyui. "
-            "--make-candidates 일 때는 후보 3장 백엔드로 해석. "
-            "그 외에는 .env GENERATOR_EMOTICON 우선."
-        ),
-    )
-    p.add_argument(
-        "--candidate-generator",
-        default="",
-        help="후보 3장 전용 (--make-candidates). openai | mock. 비우면 .env GENERATOR_CANDIDATE.",
+        help="이미지 백엔드: mock(Pillow 목업), openai(GPT Image API).",
     )
     p.add_argument(
         "--openai-model",
@@ -397,6 +371,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=("auto", "generate", "edit"),
         default="auto",
         help="컷 OpenAI: auto=참조 이미지 images.edit 우선, 실패 시 generate 폴백. edit|generate 로 고정 가능.",
+    )
+    p.add_argument(
+        "--grid-mode",
+        action="store_true",
+        help=(
+            "[OpenAI 전용] 16컷을 4×4 그리드 1장으로 생성 후 셀 크롭 — API 호출 1회로 비용 절감. "
+            "--generator openai 와 함께 사용. --test-one / --test-ids 와는 병용 불가."
+        ),
+    )
+    p.add_argument(
+        "--art-style",
+        choices=("illustration", "realistic"),
+        default="illustration",
+        help=(
+            "생성 스타일: illustration=치비·수채화 카툰(기본), "
+            "realistic=한국 웹툰 세미-리얼리스틱."
+        ),
     )
     p.add_argument(
         "--ai-text",
@@ -531,14 +522,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="character_candidates/ 에 캐릭터 후보만 생성하고 종료합니다.",
     )
     p.add_argument(
-        "--reuse-character",
-        action="store_true",
-        help=(
-            "기존 character/canonical_character.png 재사용. GPT 후보 생성 생략 "
-            "(또는 .env EMOTICON_REUSE_CHARACTER / COMFYUI_TEST_MODE)."
-        ),
-    )
-    p.add_argument(
         "--candidate-count",
         type=int,
         default=3,
@@ -619,26 +602,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--drift-threshold",
         type=float,
-        default=-1.0,
-        help=(
-            "drift_similarity 통과 기준(0–1). 미지정(-1) 시 "
-            "STICKER_DRIFT_THRESHOLD / ILLUSTRATION_DRIFT_THRESHOLD (.env) 사용."
-        ),
-    )
-    p.add_argument(
-        "--source-mode",
-        choices=("auto", "photo", "illustration", "character"),
-        default="auto",
-        help=(
-            "입력 기준: photo=실사 identity, illustration=캐릭터 아트, "
-            "character=canonical_character.png 스티커 연기, auto=reference 분류."
-        ),
-    )
-    p.add_argument(
-        "--output-mode",
-        choices=("sticker", "illustration"),
-        default="",
-        help="출력 톤: sticker=이모티콘, illustration=감성 일러스트 (.env 기본값).",
+        default=0.68,
+        help="v0.5 drift_similarity 통과 기준(0–1, 기본 0.68).",
     )
     p.add_argument(
         "--strict-drift",
@@ -693,7 +658,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _count_png_files(directory: Path) -> int:
     if not directory.is_dir():
         return 0
-    return len(glob_image_files(directory, "*.png"))
+    return sum(1 for p in directory.glob("*.png") if p.is_file())
 
 
 def _safe_remove_series_output(out_root: Path, package_dir: Path) -> None:
@@ -1235,8 +1200,8 @@ def _print_run_summary(
         print(f"- selected_cut_ids: {', '.join(sel_ids_list)}")
 
     cand_dir = package_dir / "character_candidates"
-    has_base_candidates = (cand_dir / "candidates.json").is_file() or bool(
-        glob_image_files(cand_dir, "candidate_*.png")
+    has_base_candidates = (cand_dir / "candidates.json").is_file() or any(
+        cand_dir.glob("candidate_*.png")
     )
 
     print("[다음 추천 작업]")
@@ -1315,7 +1280,7 @@ def _humanize_after_generate(
     if not postprocess:
         return
     hp = HumanizePostProcessor(strength)
-    inputs = sorted(glob_image_files(raw_out_dir, "*.png"), key=lambda x: x.stem)
+    inputs = sorted(raw_out_dir.glob("*.png"), key=lambda x: x.stem)
     if not inputs:
         return
     hp.process_batch(inputs, processed_dir)
@@ -1410,15 +1375,6 @@ def main(argv: list[str] | None = None) -> int:
             pass
 
     load_dotenv()
-    from services.env_log import log_openai_env_status
-
-    log_openai_env_status("[ENV] app.py")
-    gen_settings = load_generator_settings()
-    prompt_settings = load_prompt_settings()
-    log_prompt_config(prompt_settings)
-    from services.generator_config import log_startup_config
-
-    log_startup_config(gen_settings)
     args = parse_args(argv)
     had_canonical_cli = getattr(args, "canonical_character", None) is not None
     had_sheet_cli = bool(getattr(args, "use_character_sheet", False)) and (
@@ -1460,10 +1416,9 @@ def main(argv: list[str] | None = None) -> int:
         list(selected_cut_ids) if partial_generation and selected_cut_ids else None
     )
 
-    try:
-        character_path = resolve_upload_character_path(args.character, verify=True)
-    except FileNotFoundError as exc:
-        print(f"[오류] 캐릭터 이미지를 열 수 없습니다(AppleDouble ._ 파일 제외): {exc}", file=sys.stderr)
+    character_path: Path = args.character
+    if not character_path.is_file():
+        print(f"[오류] 캐릭터 이미지를 찾을 수 없습니다: {character_path}", file=sys.stderr)
         return 2
 
     series_name: str = args.series
@@ -1524,6 +1479,7 @@ def main(argv: list[str] | None = None) -> int:
         style_si = clamp_style_intensity(getattr(args, "style_intensity", 0.5))
         pose_si = clamp_strength(getattr(args, "pose_variation_strength", 1.0))
         expr_si = clamp_strength(getattr(args, "expression_strength", 1.0))
+        art_style = str(getattr(args, "art_style", "illustration")).strip().lower()
 
         character_dir = package_dir / "character"
         character_dir.mkdir(parents=True, exist_ok=True)
@@ -1580,35 +1536,12 @@ def main(argv: list[str] | None = None) -> int:
             personality_hint=(args.personality_hint or None) or None,
             reference_type=ref_class.reference_type,
         )
-        src_mode = resolve_source_mode(
-            ref_class.reference_type,
-            getattr(args, "source_mode", None),
-            settings=prompt_settings,
-        )
-        out_mode_arg = (getattr(args, "output_mode", None) or "").strip()
         pet = PetProfileAnalyzer().analyze(
             Path(_id_src),
             species_hint=getattr(args, "species_hint", None),
             personality_hint=(args.personality_hint or None) or None,
         )
         profile = CharacterProfile.from_identity_profile(identity_profile)
-        emoticon_backend_early = resolve_emoticon_generator(args.generator, cli=True)
-        out_mode = resolve_output_mode(
-            out_mode_arg or None,
-            settings=prompt_settings,
-            engine=emoticon_backend_early,
-        )
-        prompt_tuning = prompt_settings.tuning_for(emoticon_backend_early)
-        entity_profile = build_entity_profile(
-            identity_profile,
-            reference_type=ref_class.reference_type,
-            source_mode=src_mode,
-            emotion_strength=prompt_tuning.emotion_strength,
-            pose_variation=prompt_tuning.pose_variation,
-            identity_lock=prompt_tuning.identity_lock,
-            species_hint=getattr(args, "species_hint", None),
-        )
-        log_entity_resolution(entity_profile, source_mode=src_mode, output_mode=out_mode)
         meta_dir.mkdir(parents=True, exist_ok=True)
         (meta_dir / "identity_profile.json").write_text(
             json.dumps(identity_profile.model_dump(), ensure_ascii=False, indent=2) + "\n",
@@ -1747,14 +1680,6 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 standardized_relative_out = "character/standardized_character_mock.png"
             elif stylizer_backend == "openai":
-                from services.env_log import log_openai_check_for_generator, require_openai_api_key
-
-                log_openai_check_for_generator("openai")
-                try:
-                    require_openai_api_key(context="stylizer=openai")
-                except OpenAIMissingKeyError as mk:
-                    print(str(mk), file=sys.stderr)
-                    return 7
                 stz = create_stylizer(
                     "openai",
                     openai_model=args.openai_model,
@@ -1846,42 +1771,6 @@ def main(argv: list[str] | None = None) -> int:
         mgr = CanonicalCharacterManager()
 
         if bool(getattr(args, "make_candidates", False)):
-            from services.canonical_reuse import (
-                is_reuse_character_enabled,
-                job_dir_from_package,
-                log_gpt_candidate_skipped,
-                log_reuse_character,
-                persist_job_canonical_cache,
-                resolve_canonical_path,
-            )
-
-            reuse_on = is_reuse_character_enabled(
-                cli_reuse=bool(getattr(args, "reuse_character", False))
-            )
-            if reuse_on:
-                jd = job_dir_from_package(package_dir)
-                canon_reuse = resolve_canonical_path(package_dir, job_dir=jd)
-                if canon_reuse is None:
-                    print(
-                        "[오류] reuse 모드: character/canonical_character.png (또는 job 캐시)가 "
-                        "없습니다. 먼저 후보를 선택하거나 --canonical-character 를 지정하세요.",
-                        file=sys.stderr,
-                    )
-                    return 2
-                log_reuse_character(canon_reuse)
-                log_gpt_candidate_skipped(reason="reuse_character")
-                fp = persist_job_canonical_cache(package_dir, job_dir=jd)
-                summary = {
-                    "make_candidates": False,
-                    "skipped": True,
-                    "reason": "reuse_character",
-                    "canonical": str(canon_reuse.resolve()),
-                    "canonical_hash": fp.canonical_hash if fp else None,
-                    "next_step": "16컷 생성만 실행하세요 (--make-candidates 없이).",
-                }
-                print(json.dumps(summary, ensure_ascii=False, indent=2))
-                return 0
-
             cand_dir = package_dir / "character_candidates"
             cand_dir.mkdir(parents=True, exist_ok=True)
             cand_n = max(1, min(8, int(getattr(args, "candidate_count", 3) or 3)))
@@ -1891,22 +1780,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[오류] {fnf}", file=sys.stderr)
                 return 2
             try:
-                cand_backend = resolve_cli_candidate_generator(
-                    candidate_generator=str(getattr(args, "candidate_generator", "") or ""),
-                    generator_flag=str(args.generator or ""),
-                )
-                log_generator_phase(candidate=cand_backend)
-                from services.env_log import log_openai_check_for_generator, require_openai_api_key
-
-                log_openai_check_for_generator(cand_backend)
-                if cand_backend == "openai":
-                    try:
-                        require_openai_api_key(context="candidate generator=openai")
-                    except OpenAIMissingKeyError as mk:
-                        print(str(mk), file=sys.stderr)
-                        return 7
                 cgen = create_character_candidate_generator(
-                    cand_backend,
+                    args.generator,
                     openai_model=str(
                         getattr(args, "candidate_openai_model", None) or "gpt-image-1"
                     ).strip(),
@@ -1923,6 +1798,7 @@ def main(argv: list[str] | None = None) -> int:
                     output_dir=cand_dir,
                     used_character_sheet=used_sh,
                     source_reference=src_label,
+                    art_style=art_style,
                 )
             except OpenAIMissingKeyError as mk:
                 print(str(mk), file=sys.stderr)
@@ -2031,43 +1907,8 @@ def main(argv: list[str] | None = None) -> int:
                 {"original_reference": str(cpp.resolve())},
             )
 
-        from services.canonical_reuse import (
-            is_reuse_character_enabled,
-            job_dir_from_package,
-            log_gpt_candidate_skipped,
-            log_reuse_character,
-            persist_job_canonical_cache,
-            prompt_meta_canonical_fields,
-            resolve_canonical_path,
-        )
-
-        reuse_on = is_reuse_character_enabled(
-            cli_reuse=bool(getattr(args, "reuse_character", False))
-        )
-        if reuse_on and not bool(getattr(args, "make_candidates", False)):
-            jd_reuse = job_dir_from_package(package_dir)
-            canon_reuse = resolve_canonical_path(package_dir, job_dir=jd_reuse)
-            if canon_reuse is None:
-                print(
-                    "[오류] reuse 모드: canonical_character.png 가 없습니다. "
-                    "--select-candidate 또는 web에서 후보 선택 후 재시도하세요.",
-                    file=sys.stderr,
-                )
-                return 2
-            log_reuse_character(canon_reuse)
-            log_gpt_candidate_skipped(reason="reuse_character")
-            persist_job_canonical_cache(package_dir, job_dir=jd_reuse)
-            if mgr.get_canonical_path(package_dir) is None:
-                mgr.set_from_existing_image(
-                    canon_reuse,
-                    package_dir,
-                    "reuse_character_cache",
-                    {"original_reference": str(canon_reuse.resolve()), "policy": CANONICAL_BASE_POLICY_KO},
-                )
-
         canon_abs = mgr.get_canonical_path(package_dir)
         canonical_character_used_for_pkg = bool(canon_abs)
-        _canonical_prompt_meta: dict[str, str] = prompt_meta_canonical_fields(package_dir)
         canonical_character_path_for_pkg = (
             "character/canonical_character.png" if canon_abs else None
         )
@@ -2242,83 +2083,29 @@ def main(argv: list[str] | None = None) -> int:
 
         char_paths = ref_result.get("paths") or {}
 
-        emoticon_backend = resolve_emoticon_generator(args.generator, cli=True)
-        prompt_builder = PromptBuilder(engine=emoticon_backend)
+        prompt_builder = PromptBuilder()
         cut_payloads: list[dict[str, object]] = []
-        directing_records: list[dict[str, object]] = []
         for item in items_for_plan:
-            built = prompt_builder.build_cut(
+            ptxt = prompt_builder.build_prompt(
                 item,
-                engine=emoticon_backend,
                 theme=theme,
                 series_name=series_name,
                 profile=profile,
-                identity_profile=identity_profile,
                 reference_description=visual_anchor_note,
-                reference_type=ref_class.reference_type,
-                source_mode=src_mode,
-                output_mode=out_mode,
                 no_ai_text=no_ai_text,
+                reference_type=ref_class.reference_type,
+                canonical_identity_mode=canonical_identity_mode,
+                canonical_sheet_mode=canonical_sheet_mode,
+                character_art_direct_canonical=cad_for_prompt,
+                series_pack_coherence=True,
+                style_intensity=style_si,
+                identity_profile=identity_profile,
+                pose_variation_strength=pose_si,
+                expression_strength=expr_si,
+                force_identity_lock=bool(canon_ref or canonical_sheet_mode),
+                art_style=art_style,
             )
-            log_prompt_for_cut(built)
-            row_item = dict(item)
-            if built.pose_plan:
-                directing_records.append(
-                    {
-                        "cut_id": str(built.cut_id),
-                        "directing_framing": built.directing_framing,
-                        "directing_camera": built.directing_camera,
-                        "camera": built.directing_camera,
-                        "framing": built.directing_framing,
-                        "body_direction": built.pose_plan.body_direction,
-                        "sampler_denoise": built.sampler_denoise,
-                        "identity_weight": built.identity_weight,
-                        "framing_reroll": getattr(
-                            built.pose_plan, "framing_rerolled", False
-                        ),
-                    }
-                )
-            cut_payloads.append(
-                {
-                    "item": row_item,
-                    "prompt": built.primary_text,
-                    "instruction": built.instruction,
-                    "positive": built.positive,
-                    "negative": built.negative,
-                    "prompt_meta": {
-                        "engine": built.engine,
-                        "source_mode": built.source_mode,
-                        "output_mode": built.output_mode,
-                        "entity_type": built.entity_type,
-                        "eye_style": built.eye_style,
-                        "mouth_style": built.mouth_style,
-                        "expression_intensity": built.expression_intensity,
-                        "directing_framing": built.directing_framing,
-                        "directing_camera": built.directing_camera,
-                        "emotion_fx": built.emotion_fx,
-                        "staging_pattern_id": built.staging_pattern_id,
-                        "acting_intensity": built.acting_intensity,
-                        "sampler_denoise": built.sampler_denoise,
-                        "identity_weight": built.identity_weight,
-                        **_canonical_prompt_meta,
-                        **(
-                            {
-                                "pose_type": built.pose_plan.pose_type,
-                                "camera_framing": built.pose_plan.camera_framing,
-                                "body_direction": built.pose_plan.body_direction,
-                                "hand_action": built.pose_plan.hand_action,
-                                "hand_action_id": built.pose_plan.hand_action_id,
-                                "arm_pose": built.pose_plan.arm_pose,
-                                "body_language": built.pose_plan.body_language,
-                                "composition_style": built.pose_plan.composition_style,
-                                "emotion_category": built.pose_plan.emotion_category,
-                            }
-                            if built.pose_plan
-                            else {}
-                        ),
-                    },
-                }
-            )
+            cut_payloads.append({"item": item, "prompt": str(ptxt)})
 
         prompts_records: list[dict] = []
         for row in cut_payloads:
@@ -2327,7 +2114,6 @@ def main(argv: list[str] | None = None) -> int:
             pr = dict(row)["prompt"]
             assert isinstance(pr, str)
             cut_id_s = str(it["id"])
-            meta = dict(row).get("prompt_meta") or {}
             prompts_records.append(
                 {
                     "id": cut_id_s,
@@ -2343,14 +2129,6 @@ def main(argv: list[str] | None = None) -> int:
                     "importance": str(it.get("importance", "")),
                     "risk_notes": str(it.get("risk_notes", "")),
                     "prompt": pr,
-                    "eye_style": meta.get("eye_style", ""),
-                    "mouth_style": meta.get("mouth_style", ""),
-                    "expression_intensity": meta.get("expression_intensity", ""),
-                    "directing_framing": meta.get("directing_framing", ""),
-                    "directing_camera": meta.get("directing_camera", ""),
-                    "emotion_fx": meta.get("emotion_fx", ""),
-                    "staging_pattern_id": meta.get("staging_pattern_id", ""),
-                    "acting_intensity": meta.get("acting_intensity", ""),
                 }
             )
         (meta_dir / "prompts.json").write_text(
@@ -2363,67 +2141,25 @@ def main(argv: list[str] | None = None) -> int:
             encoding="utf-8",
         )
 
-        print(
-            f"[GENERATOR] resolved_generator={emoticon_backend}",
-            file=sys.stderr,
-        )
-        log_generator_phase(emoticon=emoticon_backend)
-        from services.env_log import log_openai_check_for_generator, require_openai_api_key
-
-        log_openai_check_for_generator(emoticon_backend)
-
-        if emoticon_backend == "openai":
-            try:
-                require_openai_api_key(context="emoticon generator=openai")
-            except OpenAIMissingKeyError as mk:
-                print(str(mk), file=sys.stderr)
-                return 7
-
-        if emoticon_backend == "comfyui":
-            wf = gen_settings.workflow_path()
-            if not wf.is_file():
-                print(
-                    f"[오류] ComfyUI workflow 없음: {wf}\n"
-                    "       · COMFYUI_WORKFLOW 또는 workflows/comfyui/ 파일을 확인하세요.",
-                    file=sys.stderr,
-                )
-                return 9
-            from services.comfyui_checkpoints import ComfyUICheckpointNotFoundError, log_comfyui_checkpoints
-            from services.comfyui_client import ComfyUIClient, ComfyUIError
-
-            if not ComfyUIClient(gen_settings.comfyui_url).health_ok():
-                print(
-                    f"[오류] ComfyUI 서버 연결 실패: {gen_settings.comfyui_url}\n"
-                    "       · ./scripts/start_comfyui_mac.sh 로 서버를 띄우세요.",
-                    file=sys.stderr,
-                )
-                return 9
-            from services.comfyui_runtime import log_comfyui_runtime_hints
-
-            log_comfyui_runtime_hints(
-                batch_size=gen_settings.comfyui_batch_size,
-                queue_concurrency=gen_settings.comfyui_batch_concurrency,
+        if args.generator == "openai" and not (os.environ.get("OPENAI_API_KEY") or "").strip():
+            print(
+                "[오류] --generator openai 는 OPENAI_API_KEY 가 필요합니다.\n"
+                "       · 프로젝트 루트(`KakaoEmoticonFactory/`)에 `.env`를 두고 키를 넣으세요(.env.example 참고).\n"
+                "       · 또는 시스템 환경 변수 `OPENAI_API_KEY` 를 설정하세요.\n"
+                "       · API 없이 로컬에서 끝까지 돌리려면 `--generator mock` 또는 `--full-pipeline` 을 사용하세요.",
+                file=sys.stderr,
             )
-            try:
-                log_comfyui_checkpoints()
-            except ComfyUICheckpointNotFoundError as ck_exc:
-                print(f"[오류] {ck_exc}", file=sys.stderr)
-                return 9
-            except ComfyUIError as cui_exc:
-                print(f"[오류] {cui_exc}", file=sys.stderr)
-                return 9
+            return 7
 
         generator = create_image_generator(
-            emoticon_backend,
+            args.generator,
             openai_model=args.openai_model,
             openai_size=args.image_size,
             openai_retries=args.max_retries,
             openai_mode=args.openai_mode,
             no_ai_text=no_ai_text,
-            comfyui_url=gen_settings.comfyui_url,
-            comfyui_workflow=gen_settings.workflow_path(),
         )
-        if emoticon_backend == "openai":
+        if args.generator == "openai":
             _warn_cut_generation_reference(
                 package_dir,
                 generation_reference_kind=generation_reference_kind,
@@ -2434,25 +2170,14 @@ def main(argv: list[str] | None = None) -> int:
         pipeline_t0 = time.perf_counter()
         generation_started = datetime.now(timezone.utc).isoformat()
         generation_log: dict[str, object] = {
-            "generator": emoticon_backend,
-            "generator_backend": emoticon_backend,
-            "generator_emoticon": emoticon_backend,
-            "generator_candidate": candidate_generator_from_env(),
-            "openai_model": args.openai_model if emoticon_backend == "openai" else None,
-            "openai_request_size": args.image_size if emoticon_backend == "openai" else None,
-            "openai_mode": args.openai_mode if emoticon_backend == "openai" else None,
-            "max_retries_per_cycle": args.max_retries if emoticon_backend == "openai" else None,
-            "comfyui_url": gen_settings.comfyui_url if emoticon_backend == "comfyui" else None,
-            "comfyui_workflow": str(gen_settings.workflow_path())
-            if emoticon_backend == "comfyui"
-            else None,
-            "comfyui_batch_concurrency": gen_settings.comfyui_batch_concurrency
-            if emoticon_backend == "comfyui"
-            else None,
-            "comfyui_batch_size": gen_settings.comfyui_batch_size
-            if emoticon_backend == "comfyui"
-            else None,
+            "generator": args.generator,
+            "generator_backend": args.generator,
+            "openai_model": args.openai_model if args.generator == "openai" else None,
+            "openai_request_size": args.image_size if args.generator == "openai" else None,
+            "openai_mode": args.openai_mode if args.generator == "openai" else None,
+            "max_retries_per_cycle": args.max_retries if args.generator == "openai" else None,
             "continue_on_error": bool(args.continue_on_error),
+            "grid_mode": bool(getattr(args, "grid_mode", False)) and args.generator == "openai",
             "test_one": test_one,
             "test_one_cli": bool(test_one_cli),
             "partial_generation": bool(partial_generation),
@@ -2469,15 +2194,12 @@ def main(argv: list[str] | None = None) -> int:
             "stylizer_used_for_generation": stylizer_used_for_generation,
             "reference_type": ref_class.reference_type,
             "style_intensity": style_si,
+            "art_style": art_style,
             "pose_variation_strength": pose_si,
             "expression_strength": expr_si,
             "identity_profile_source": IDENTITY_PROFILE_SOURCE,
-            "entity_type": entity_profile.reference_entity,
-            "entity_type_resolved": entity_profile.entity_type,
+            "entity_type": identity_profile.entity_type,
             "entity_type_confidence": identity_profile.entity_type_confidence,
-            "source_mode": src_mode,
-            "output_mode": out_mode,
-            "prompt_pipeline": "services.prompts.v1",
             "canonical_character_used": bool(canonical_character_used_for_pkg),
             "canonical_character_path": canonical_character_path_for_pkg,
             "canonical_character_policy": canonical_character_policy_for_pkg,
@@ -2514,74 +2236,84 @@ def main(argv: list[str] | None = None) -> int:
         cuts_log_ref = generation_log["cuts"]
         assert isinstance(cuts_log_ref, list)
 
-        try:
-            if emoticon_backend == "comfyui":
-                from services.comfyui_batch import (
-                    log_comfyui_emoticon_entry,
-                    run_comfyui_emoticon_cuts,
-                )
-
-                load_dotenv()
-                log_comfyui_emoticon_entry(
-                    gen_settings,
-                    cut_count=len(cut_payloads),
-                    emoticon_backend=emoticon_backend,
-                )
-                gen_aborted_exc, generation_stopped = run_comfyui_emoticon_cuts(
+        # ── 그리드 모드: API 1회 호출로 16컷 일괄 생성 ──────────────────
+        _grid_pre_generated: set[str] = set()
+        _grid_enabled = (
+            args.generator == "openai"
+            and bool(getattr(args, "grid_mode", False))
+            and not test_one
+            and not partial_generation
+            and hasattr(generator, "generate_grid")
+        )
+        if _grid_enabled:
+            print(
+                f"[그리드] 4×4 단일 API 호출 시작 ({len(cut_payloads)}컷)…",
+                file=sys.stderr,
+            )
+            _grid_t0 = time.perf_counter()
+            try:
+                _grid_succeeded, _grid_failed = generator.generate_grid(
                     cut_payloads,
-                    generator=generator,
-                    processor=processor,
-                    generation_reference_path=generation_reference_path,
-                    no_ai_text=no_ai_text,
-                    emoticon_subdir=emoticon_subdir,
-                    raw_out_dir=raw_out_dir,
-                    png_no_text_dir=png_no_text_dir,
-                    sticker_dir=sticker_dir,
-                    failed_dir=failed_dir,
-                    package_rows=package_rows,
-                    cuts_log_ref=cuts_log_ref,
-                    meta_paths=meta_paths,
-                    concurrency=gen_settings.comfyui_batch_concurrency,
-                    batch_size=gen_settings.comfyui_batch_size,
-                    continue_on_error=True,
+                    raw_out_dir,
+                    reference_path=generation_reference_path,
                 )
-                if directing_records:
-                    from services.directing.directing_report import (
-                        build_directing_report,
-                        log_directing_report,
-                        write_directing_report,
+                _grid_wall = round(time.perf_counter() - _grid_t0, 4)
+                _grid_pre_generated = set(_grid_succeeded.keys())
+                generation_log["grid_call"] = {
+                    "mode": "grid",
+                    "wall_seconds": _grid_wall,
+                    "succeeded_cut_ids": list(_grid_succeeded.keys()),
+                    "failed_cut_ids": _grid_failed,
+                    "attempt_logs": [
+                        dict(x)
+                        for x in getattr(generator, "last_attempt_logs", []) or []
+                    ],
+                }
+                print(
+                    f"[그리드] 완료: {len(_grid_succeeded)}성공, {len(_grid_failed)}실패 "
+                    f"({_grid_wall}s). 실패 컷은 개별 fallback.",
+                    file=sys.stderr,
+                )
+            except Exception as _grid_exc:
+                _grid_wall = round(time.perf_counter() - _grid_t0, 4)
+                generation_log["grid_call"] = {
+                    "mode": "grid",
+                    "wall_seconds": _grid_wall,
+                    "error": repr(_grid_exc),
+                }
+                print(
+                    f"[그리드] 전체 실패: {_grid_exc!r} — 개별 생성 모드로 폴백",
+                    file=sys.stderr,
+                )
+                _grid_enabled = False
+
+        try:
+            for row in cut_payloads:
+                item = dict(row)["item"]
+                assert isinstance(item, dict)
+                prompt = dict(row)["prompt"]
+                assert isinstance(prompt, str)
+                cut_id = str(item["id"])
+                text = str(item["text"])
+                raw_png = raw_out_dir / f"{cut_id}.png"
+
+                gen_t0 = time.perf_counter()
+                attempts_snapshot: list[dict] = []
+                try:
+                    # 그리드 모드: 이미 크롭된 raw_png가 있으면 API 호출 생략
+                    _use_grid_cell = (
+                        _grid_enabled
+                        and cut_id in _grid_pre_generated
+                        and raw_png.exists()
                     )
-
-                    by_cut = {str(r["cut_id"]): dict(r) for r in directing_records}
-                    for clog in cuts_log_ref:
-                        if not isinstance(clog, dict):
-                            continue
-                        cid = str(clog.get("id", ""))
-                        if cid not in by_cut:
-                            continue
-                        if clog.get("body_visibility_score") is not None:
-                            by_cut[cid]["body_visibility_score"] = clog[
-                                "body_visibility_score"
-                            ]
-                        if clog.get("body_visibility_rerender"):
-                            by_cut[cid]["body_visibility_rerender"] = True
-                    report = build_directing_report(list(by_cut.values()))
-                    log_directing_report(report)
-                    write_directing_report(package_dir, report)
-            else:
-                for row in cut_payloads:
-                    item = dict(row)["item"]
-                    assert isinstance(item, dict)
-                    prompt = str(dict(row).get("instruction") or dict(row)["prompt"])
-                    neg = str(dict(row).get("negative") or "")
-                    assert isinstance(prompt, str)
-                    cut_id = str(item["id"])
-                    text = str(item["text"])
-                    raw_png = raw_out_dir / f"{cut_id}.png"
-
-                    gen_t0 = time.perf_counter()
-                    attempts_snapshot: list[dict] = []
-                    try:
+                    if _use_grid_cell:
+                        print(
+                            f"[그리드] 컷 {cut_id}: 그리드 셀 재사용 (API 호출 생략)",
+                            file=sys.stderr,
+                        )
+                        wall_s = 0.0
+                        attempts_snapshot = []
+                    else:
                         item_run = {**item, "_no_ai_text": no_ai_text}
                         generator.generate(
                             prompt,
@@ -2590,102 +2322,101 @@ def main(argv: list[str] | None = None) -> int:
                             item_id=cut_id,
                             reference_path=generation_reference_path,
                             item=item_run,
-                            negative_prompt=neg or None,
                         )
                         wall_s = round(time.perf_counter() - gen_t0, 4)
                         attempts_snapshot = [
                             dict(x) for x in getattr(generator, "last_attempt_logs", []) or []
                         ]
-                        if no_ai_text:
-                            nt = png_no_text_dir / f"{cut_id}.png"
-                            processor.normalize_emoticon_to(raw_png, nt)
-                            out_final = sticker_dir / f"{cut_id}.png"
-                            tpos = str(item.get("text_position", "bottom"))
-                            processor.add_text_overlay(nt, out_final, text, tpos)
-                        else:
-                            processor.normalize_emoticon(raw_png)
+                    if no_ai_text:
+                        nt = png_no_text_dir / f"{cut_id}.png"
+                        processor.normalize_emoticon_to(raw_png, nt)
+                        out_final = sticker_dir / f"{cut_id}.png"
+                        tpos = str(item.get("text_position", "bottom"))
+                        processor.add_text_overlay(nt, out_final, text, tpos)
+                    else:
+                        processor.normalize_emoticon(raw_png)
 
-                        prow = {
-                            **{k: v for k, v in item.items() if not str(k).startswith("_")},
-                            "png": f"{emoticon_subdir}/{cut_id}.png",
-                            "icon": f"icon/{cut_id}.png",
+                    prow = {
+                        **{k: v for k, v in item.items() if not str(k).startswith("_")},
+                        "png": f"{emoticon_subdir}/{cut_id}.png",
+                        "icon": f"icon/{cut_id}.png",
+                        "prompt": prompt,
+                    }
+                    package_rows.append(prow)
+                    meta_paths.append(sticker_dir / f"{cut_id}.png")
+                    cuts_log_ref.append(
+                        {
+                            "id": cut_id,
+                            "success": True,
+                            "wall_seconds": wall_s,
                             "prompt": prompt,
+                            "attempt_logs": attempts_snapshot,
                         }
-                        package_rows.append(prow)
-                        meta_paths.append(sticker_dir / f"{cut_id}.png")
-                        cuts_log_ref.append(
-                            {
-                                "id": cut_id,
-                                "success": True,
-                                "wall_seconds": wall_s,
-                                "prompt": prompt,
-                                "attempt_logs": attempts_snapshot,
-                            }
-                        )
-                    except OpenAIMissingKeyError as missing:
-                        gen_aborted_exc = missing
-                        wall_s = round(time.perf_counter() - gen_t0, 4)
-                        attempts_snapshot = [
-                            dict(x)
-                            for x in getattr(generator, "last_attempt_logs", []) or []
-                        ]
-                        cuts_log_ref.append(
-                            {
-                                "id": cut_id,
-                                "success": False,
-                                "wall_seconds": wall_s,
-                                "prompt": prompt,
-                                "error": repr(missing),
-                                "attempt_logs": attempts_snapshot,
-                            }
-                        )
-                        print(f"[오류] {missing}", file=sys.stderr)
+                    )
+                except OpenAIMissingKeyError as missing:
+                    gen_aborted_exc = missing
+                    wall_s = round(time.perf_counter() - gen_t0, 4)
+                    attempts_snapshot = [
+                        dict(x)
+                        for x in getattr(generator, "last_attempt_logs", []) or []
+                    ]
+                    cuts_log_ref.append(
+                        {
+                            "id": cut_id,
+                            "success": False,
+                            "wall_seconds": wall_s,
+                            "prompt": prompt,
+                            "error": repr(missing),
+                            "attempt_logs": attempts_snapshot,
+                        }
+                    )
+                    print(f"[오류] {missing}", file=sys.stderr)
+                    generation_stopped = True
+                    break
+                except Exception as exc:
+                    wall_s = round(time.perf_counter() - gen_t0, 4)
+                    attempts_snapshot = [
+                        dict(x) for x in getattr(generator, "last_attempt_logs", []) or []
+                    ]
+                    tb = traceback.format_exc()
+                    if raw_png.exists():
+                        try:
+                            raw_png.unlink()
+                        except OSError:
+                            pass
+
+                    err_payload = {
+                        "id": cut_id,
+                        "error": repr(exc),
+                        "traceback": tb,
+                        "wall_seconds": wall_s,
+                        "attempt_logs": attempts_snapshot,
+                        "prompt_excerpt": prompt[:500],
+                    }
+                    (failed_dir / f"{cut_id}_error.json").write_text(
+                        json.dumps(err_payload, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
+                    print(
+                        f"[실패] 컷 {cut_id} 이미지 생성 실패 → failed/{cut_id}_error.json\n{tb}",
+                        file=sys.stderr,
+                    )
+
+                    cuts_log_ref.append(
+                        {
+                            "id": cut_id,
+                            "success": False,
+                            "wall_seconds": wall_s,
+                            "prompt": prompt,
+                            "error": repr(exc),
+                            "attempt_logs": attempts_snapshot,
+                        }
+                    )
+
+                    if not args.continue_on_error:
+                        gen_aborted_exc = exc
                         generation_stopped = True
                         break
-                    except Exception as exc:
-                        wall_s = round(time.perf_counter() - gen_t0, 4)
-                        attempts_snapshot = [
-                            dict(x) for x in getattr(generator, "last_attempt_logs", []) or []
-                        ]
-                        tb = traceback.format_exc()
-                        if raw_png.exists():
-                            try:
-                                raw_png.unlink()
-                            except OSError:
-                                pass
-
-                        err_payload = {
-                            "id": cut_id,
-                            "error": repr(exc),
-                            "traceback": tb,
-                            "wall_seconds": wall_s,
-                            "attempt_logs": attempts_snapshot,
-                            "prompt_excerpt": prompt[:500],
-                        }
-                        (failed_dir / f"{cut_id}_error.json").write_text(
-                            json.dumps(err_payload, ensure_ascii=False, indent=2) + "\n",
-                            encoding="utf-8",
-                        )
-                        print(
-                            f"[실패] 컷 {cut_id} 이미지 생성 실패 → failed/{cut_id}_error.json\n{tb}",
-                            file=sys.stderr,
-                        )
-
-                        cuts_log_ref.append(
-                            {
-                                "id": cut_id,
-                                "success": False,
-                                "wall_seconds": wall_s,
-                                "prompt": prompt,
-                                "error": repr(exc),
-                                "attempt_logs": attempts_snapshot,
-                            }
-                        )
-
-                        if not args.continue_on_error:
-                            gen_aborted_exc = exc
-                            generation_stopped = True
-                            break
 
         finally:
             generation_log["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
@@ -2714,7 +2445,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_cut_ids=qc_expected_ids,
             )
             print(json.dumps(partial, ensure_ascii=False, indent=2))
-            if isinstance(gen_aborted_exc, OpenAIMissingKeyError) and emoticon_backend == "openai":
+            if isinstance(gen_aborted_exc, OpenAIMissingKeyError):
                 return 7
             print(
                 f"[오류] 생성 중단: {gen_aborted_exc}",
@@ -2723,23 +2454,17 @@ def main(argv: list[str] | None = None) -> int:
             return 8
 
         c_checker: CharacterConsistencyChecker | None = None
-        drift_cli = float(getattr(args, "drift_threshold", -1.0))
-        drift_thr = (
-            drift_cli
-            if drift_cli >= 0.0
-            else prompt_settings.drift_threshold()
-        )
         if effective_check_consistency or effective_auto_regenerate:
             c_checker = CharacterConsistencyChecker(
                 threshold=args.consistency_threshold,
-                drift_threshold=drift_thr,
+                drift_threshold=float(getattr(args, "drift_threshold", 0.68)),
                 strict_drift=bool(getattr(args, "strict_drift", False)),
             )
 
         consistency_report: dict[str, object] | None = None
         waves_left = max(0, int(args.max_regenerate_attempts))
         regeneration_log_body: dict[str, object] = {
-            "generator": emoticon_backend,
+            "generator": args.generator,
             "test_one": test_one,
             "partial_generation": bool(partial_generation),
             "selected_cut_ids": list(selected_cut_ids) if selected_cut_ids else None,
@@ -2784,10 +2509,6 @@ def main(argv: list[str] | None = None) -> int:
             style_intensity=style_si,
             pose_variation_strength=pose_si,
             expression_strength=expr_si,
-            identity_profile=identity_profile,
-            source_mode=src_mode,
-            output_mode=out_mode,
-            emoticon_engine=emoticon_backend,
         )
 
         if partial_generation and selected_cut_ids:
@@ -2812,7 +2533,7 @@ def main(argv: list[str] | None = None) -> int:
             fails = consistency_report.get("failed") or []
             cons_res: dict | None = None
             if fails and effective_auto_regenerate and waves_left > 0:
-                mgr = RegenerationManager(emoticon_backend)
+                mgr = RegenerationManager(args.generator)
                 try:
                     cons_res = mgr.regenerate_failed_items(
                         regeneration_ctx,
@@ -2830,8 +2551,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 except OpenAIMissingKeyError as mk:
                     print(f"[오류] 재생성 중 {mk}", file=sys.stderr)
-                    if emoticon_backend == "openai":
-                        return 7
+                    return 7
 
                 if cons_res is not None:
                     regeneration_log_body["consistency_phase"] = _summarize_regeneration_phase(
@@ -2942,7 +2662,7 @@ def main(argv: list[str] | None = None) -> int:
             no_ai_text=no_ai_text,
             text_overlay_applied=no_ai_text,
             stylizer_backend=stylizer_backend,
-            generator_backend=emoticon_backend,
+            generator_backend=args.generator,
             canonical_reference_used=canonical_reference_used,
             canonical_reference_policy=canonical_reference_policy,
             pet_profile_source=PET_PROFILE_SOURCE,
@@ -2985,7 +2705,7 @@ def main(argv: list[str] | None = None) -> int:
                 issues = list(png_cut_err.get(cid, [])) + list(icon_cut_err.get(cid, []))
                 fail_quality_payload.append({"id": cid, "issues": issues})
 
-            mgr_q = RegenerationManager(emoticon_backend)
+            mgr_q = RegenerationManager(args.generator)
             try:
                 qc_regen_result = mgr_q.regenerate_failed_items(
                     regeneration_ctx,
@@ -3003,8 +2723,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except OpenAIMissingKeyError as mk:
                 print(f"[오류] 품질 재생성 중 {mk}", file=sys.stderr)
-                if emoticon_backend == "openai":
-                    return 7
+                return 7
 
             regeneration_log_body["quality_phase"] = _summarize_regeneration_phase(
                 qc_regen_result
@@ -3052,7 +2771,7 @@ def main(argv: list[str] | None = None) -> int:
                 no_ai_text=no_ai_text,
                 text_overlay_applied=no_ai_text,
                 stylizer_backend=stylizer_backend,
-                generator_backend=emoticon_backend,
+                generator_backend=args.generator,
                 canonical_reference_used=canonical_reference_used,
                 canonical_reference_policy=canonical_reference_policy,
                 pet_profile_source=PET_PROFILE_SOURCE,

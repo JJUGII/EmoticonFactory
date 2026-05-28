@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from services.identity_profile_analyzer import IdentityProfile
-from services.prompts.human_descriptors import is_human_entity
 
 
 CRITICAL_IDENTITY_LOCK_KO = (
@@ -60,8 +59,7 @@ def trait_locks_fragment(profile: IdentityProfile | None) -> str:
     if tl.facial_landmark_lock:
         parts.append("[얼굴 랜드마크 고정] " + "; ".join(tl.facial_landmark_lock))
     if tl.fur_pattern_lock:
-        label = "[외형/의상 고정] " if is_human_entity(profile.entity_type) else "[털/무늬 고정] "
-        parts.append(label + "; ".join(tl.fur_pattern_lock))
+        parts.append("[털/무늬 고정] " + "; ".join(tl.fur_pattern_lock))
     if tl.hairstyle_lock:
         parts.append("[헤어/털 스타일 고정] " + "; ".join(tl.hairstyle_lock))
     if tl.eye_geometry_lock:
@@ -76,12 +74,11 @@ def identity_profile_fragment(profile: IdentityProfile | None) -> str:
         return ""
     dist = ", ".join(profile.distinctive_features[:6])
     pal = ", ".join(profile.primary_palette[:5])
-    hair_key = "hairstyle" if is_human_entity(profile.entity_type) else "hair_or_fur"
     return (
         f"[정체성 프로필] entity_type={profile.entity_type}; species={profile.species}; "
         f"face_shape={profile.face_shape}; eye_shape={profile.eye_shape}; "
         f"eye_color={profile.eye_color}; mood={profile.mood}; "
-        f"silhouette={profile.silhouette}; {hair_key}={profile.hair_or_fur_pattern}; "
+        f"silhouette={profile.silhouette}; hair_or_fur={profile.hair_or_fur_pattern}; "
         f"palette=[{pal}]; distinctive=[{dist}]. "
     )
 

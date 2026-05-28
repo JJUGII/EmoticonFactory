@@ -71,7 +71,7 @@ def write_text(path: Path, content: str) -> None:
 
 def main() -> None:
     if DEST.exists():
-        shutil.rmtree(DEST, ignore_errors=True)
+        shutil.rmtree(DEST)
     DEST.mkdir(parents=True)
 
     for name in FACTORY_FILES:
