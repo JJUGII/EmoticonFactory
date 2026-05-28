@@ -25,6 +25,18 @@ from services.pipeline_runner import PipelineOptions, PipelineRunner  # noqa: E4
 
 
 _CUT_LOG_RE = re.compile(r"\[OpenAI 컷 (\d{2})\]|컷 id (\d{2})")
+_DETECT_SPECIES_RE = re.compile(r"\[자동감지\] species_hint 자동 설정: (\w+)")
+_VALID_SPECIES = frozenset({"human", "cat", "dog", "rabbit", "hamster", "bird"})
+
+
+def _parse_detected_species(logs: str) -> str:
+    """파이프라인 로그에서 자동감지된 species를 추출."""
+    m = _DETECT_SPECIES_RE.search(logs)
+    if m:
+        s = m.group(1).strip().lower()
+        if s in _VALID_SPECIES:
+            return s
+    return ""
 
 
 def _format_pipeline_error(code: int, logs: list[str]) -> str:
@@ -140,8 +152,9 @@ class PipelineService:
                     opts, log=self._log_sink(job_id, logs)
                 )
                 pkg = res.package_dir
-                self.store.update(
-                    job_id,
+                # 자동감지 결과를 로그에서 파싱해서 job에 저장
+                detected_species = _parse_detected_species("".join(logs))
+                update_kwargs: dict = dict(
                     phase="candidates_ready" if res.returncode == 0 else "failed",
                     progress=100 if res.returncode == 0 else 0,
                     message="후보가 준비되었습니다." if res.returncode == 0 else "후보 생성 실패",
@@ -151,6 +164,9 @@ class PipelineService:
                     else _format_pipeline_error(res.returncode, logs),
                     log_tail="".join(logs)[-12000:],
                 )
+                if detected_species:
+                    update_kwargs["species_hint"] = detected_species
+                self.store.update(job_id, **update_kwargs)
             except Exception as exc:
                 self.store.update(
                     job_id,

@@ -138,11 +138,52 @@ class PetProfileAnalyzer:
                 source_image=rel,
             )
 
-        # ── 반려동물 프로파일 (기존) ──────────────────────────────────
+        # ── 종/대상 불명확 프로파일 (중립) ──────────────────────────
+        if species == "unknown":
+            return PetProfile(
+                species="unknown",
+                breed_style=(
+                    "subject from the reference photo — "
+                    "could be a person or any animal (determine from the image itself)"
+                ),
+                main_colors=main_colors or ["natural tones from the reference"],
+                face_pattern="preserve the exact appearance and features from the photo",
+                eye_color="match eye shape and expression from the photo",
+                ear_shape="match head/ear shape from the photo",
+                body_shape="match body silhouette and proportions from the photo",
+                tail_style="include tail only if the subject clearly has one",
+                expression_baseline=expr,
+                personality_keywords=pers_kw,
+                character_keywords=[
+                    "same subject type as the reference photo",
+                    "if subject is a person → draw as a cute chibi/emoticon human character",
+                    "if subject is an animal → draw as a cute emoticon character of that exact species",
+                    "preserve key features: face shape, colors, distinctive markings",
+                    "do NOT change a person into an animal or vice versa",
+                ],
+                negative_keywords=[
+                    "changing a person into any animal",
+                    "changing an animal into a person",
+                    "wrong species",
+                    "extra subjects in frame",
+                    "photorealistic texture",
+                    "busy background",
+                    "watermark or logo",
+                ],
+                consistency_rules=[
+                    "same subject type as the reference",
+                    "same key colors and features",
+                    "same overall appearance",
+                    "no type/species change",
+                    "one subject only",
+                    "no photorealistic texture in final sticker",
+                ],
+                source_image=rel,
+            )
+
+        # ── 반려동물 프로파일 (종 명확) ──────────────────────────────
         breed_style = (
             f"companion {species} (photo-based; do not invent a rare breed name)"
-            if species != "unknown"
-            else "single companion pet from the reference photo (species not asserted)"
         )
 
         return PetProfile(

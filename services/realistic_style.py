@@ -81,7 +81,14 @@ def realistic_candidate_prompt_for_index(
         f"스타일 힌트(이 후보): {hint}.",
         "대상 자체는 절대 바꾸지 말 것.",
     ]
-    if species_hint.strip():
+    if not species_hint.strip() or species_hint.strip().lower() == "unknown":
+        parts.append(
+            "이미지를 직접 보고 대상이 사람인지 동물인지 판단해줘. "
+            "사람이면 반드시 사람 캐릭터(웹툰 세미-리얼 스타일)로, "
+            "동물이면 해당 동물 캐릭터로 그려줘. "
+            "절대 사람을 동물로, 동물을 사람으로 바꾸지 마."
+        )
+    if species_hint.strip() and species_hint.strip().lower() != "unknown":
         sh = species_hint.strip().lower()
         if sh == "human":
             parts.append(

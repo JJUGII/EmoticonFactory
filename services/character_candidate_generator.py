@@ -45,6 +45,7 @@ class CandidateGenerationResult:
     text_only_fallback: bool = False
     drift_risk_warning: bool = False
     fallback_warning: str | None = None
+    detected_species: str = ""  # 자동감지로 결정된 종 ("" = 힌트 제공됨, "human"/"cat"/... = 자동감지)
 
 
 class BaseCharacterCandidateGenerator(ABC):
@@ -190,6 +191,29 @@ class MockCharacterCandidateGenerator(BaseCharacterCandidateGenerator):
         return result
 
 
+_VISION_DETECT_PROMPT = (
+    "Look at the main subject of this photo and answer with exactly one word from this list: "
+    "human, cat, dog, rabbit, hamster, bird, unknown. "
+    "If the main subject is a person, reply 'human'. "
+    "If it's a cat, reply 'cat'. Dog: 'dog'. Rabbit: 'rabbit'. Hamster: 'hamster'. Bird: 'bird'. "
+    "If unsure or multiple subjects, reply 'unknown'. "
+    "Reply with ONLY the single word, no punctuation."
+)
+
+_VISION_DETECT_VALID = frozenset({"human", "cat", "dog", "rabbit", "hamster", "bird", "unknown"})
+
+_VISION_FEATURE_PROMPT = (
+    "Analyze the main subject of this image and output ONLY valid JSON, no other text.\n"
+    "Format: {\"age_group\":\"adult woman\",\"hair_length\":\"long\",\"hair_color\":\"black\",\"skin_tone\":\"light\",\"notable\":\"\"}\n\n"
+    "age_group options: baby, child, teen boy, teen girl, adult man, adult woman, elderly man, elderly woman, cat, dog, rabbit, hamster, bird\n"
+    "hair_length options: bald/very short, short, medium, long, very long (or empty string for animals)\n"
+    "hair_color options: black, dark brown, brown, light brown, blonde, red, white, gray, orange (or main fur/coat color for animals)\n"
+    "skin_tone options: very light, light, medium, tan, dark (or main coat color for animals)\n"
+    "notable: any distinctive feature worth preserving (e.g. 'glasses', 'freckles', 'curly hair', 'bangs') or empty string\n\n"
+    "Output ONLY the JSON object, nothing else."
+)
+
+
 class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
     """입력 이미지 bytes → images.edit 우선; auto 실패 시에만 images.generate 폴백."""
 
@@ -215,6 +239,145 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
             )
         os.environ["OPENAI_API_KEY"] = key
 
+    def _auto_detect_species(self, client: Any, photo: Path) -> str:
+        """gpt-4o-mini Vision으로 사진 속 대상 종류 자동 분류.
+
+        Returns one of: human, cat, dog, rabbit, hamster, bird, unknown
+        Cost: ~$0.0001 (gpt-4o-mini + low detail image)
+        """
+        try:
+            import base64
+            ext = photo.suffix.lower().lstrip(".")
+            mime = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "webp": "webp"}.get(ext, "jpeg")
+            b64 = base64.b64encode(photo.read_bytes()).decode()
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/{mime};base64,{b64}",
+                                    "detail": "low",
+                                },
+                            },
+                            {"type": "text", "text": _VISION_DETECT_PROMPT},
+                        ],
+                    }
+                ],
+                max_tokens=10,
+                temperature=0,
+            )
+            detected = resp.choices[0].message.content.strip().lower().split()[0]
+            detected = detected.rstrip(".,!?")
+            result = detected if detected in _VISION_DETECT_VALID else "unknown"
+            print(f"[자동감지] 사진 분석 결과: {result}", file=sys.stderr)
+            return result
+        except Exception as exc:
+            print(f"[자동감지] Vision 분류 실패, unknown 처리: {exc}", file=sys.stderr)
+            return "unknown"
+
+    def _extract_visual_features(self, client: Any, photo: Path) -> dict[str, str]:
+        """gpt-4o-mini Vision으로 주요 시각 특징 추출 (얼굴/외모 보존용).
+
+        Returns dict with keys: age_group, hair_length, hair_color, skin_tone, notable
+        Cost: ~$0.0002 (gpt-4o-mini + low detail)
+        """
+        try:
+            ext = photo.suffix.lower().lstrip(".")
+            mime = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "webp": "webp"}.get(ext, "jpeg")
+            b64 = base64.b64encode(photo.read_bytes()).decode()
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/{mime};base64,{b64}",
+                                    "detail": "low",
+                                },
+                            },
+                            {"type": "text", "text": _VISION_FEATURE_PROMPT},
+                        ],
+                    }
+                ],
+                max_tokens=120,
+                temperature=0,
+            )
+            raw = resp.choices[0].message.content.strip()
+            # JSON만 추출 (모델이 앞뒤에 텍스트 붙이는 경우 대비)
+            start = raw.find("{")
+            end = raw.rfind("}") + 1
+            if start >= 0 and end > start:
+                features = json.loads(raw[start:end])
+                result = {
+                    "age_group": str(features.get("age_group", "")).strip(),
+                    "hair_length": str(features.get("hair_length", "")).strip(),
+                    "hair_color": str(features.get("hair_color", "")).strip(),
+                    "skin_tone": str(features.get("skin_tone", "")).strip(),
+                    "notable": str(features.get("notable", "")).strip(),
+                }
+                print(f"[특징추출] {result}", file=sys.stderr)
+                return result
+        except Exception as exc:
+            print(f"[특징추출] 실패, 기본값 사용: {exc}", file=sys.stderr)
+        return {"age_group": "", "hair_length": "", "hair_color": "", "skin_tone": "", "notable": ""}
+
+    def _build_feature_hint(self, features: dict[str, str], species: str) -> str:
+        """추출된 특징을 프롬프트 주입용 한국어 문자열로 변환."""
+        if not features or not any(features.values()):
+            return ""
+        parts: list[str] = []
+        age = features.get("age_group", "")
+        hair_len = features.get("hair_length", "")
+        hair_col = features.get("hair_color", "")
+        skin = features.get("skin_tone", "")
+        notable = features.get("notable", "")
+
+        if species == "human" and age:
+            _age_ko = {
+                "baby": "아기", "child": "어린아이", "teen boy": "10대 소년",
+                "teen girl": "10대 소녀", "adult man": "성인 남성", "adult woman": "성인 여성",
+                "elderly man": "노년 남성", "elderly woman": "노년 여성",
+            }
+            parts.append(f"대상: {_age_ko.get(age, age)}")
+        if hair_len:
+            _len_ko = {
+                "bald/very short": "아주 짧은 머리 또는 민머리", "short": "짧은 머리",
+                "medium": "중간 길이 머리", "long": "긴 머리", "very long": "아주 긴 머리",
+            }
+            parts.append(f"머리 길이: {_len_ko.get(hair_len, hair_len)}")
+        if hair_col:
+            _col_ko = {
+                "black": "검은색", "dark brown": "짙은 갈색", "brown": "갈색",
+                "light brown": "밝은 갈색", "blonde": "금발", "red": "붉은색",
+                "white": "흰색", "gray": "회색", "orange": "주황색",
+            }
+            parts.append(f"머리색: {_col_ko.get(hair_col, hair_col)}")
+        if skin and species == "human":
+            parts.append(f"피부톤: {skin}")
+        if notable:
+            parts.append(f"특징: {notable}")
+
+        if not parts:
+            return ""
+
+        feature_str = ", ".join(parts)
+        lines = [
+            f"[참조 사진 특징] {feature_str}.",
+            "위 특징을 캐릭터에 그대로 반영해줘.",
+        ]
+        if species == "human" and age and "child" not in age and "baby" not in age and "teen" not in age:
+            lines.append("어린아이처럼 그리지 마. 참조 사진의 나이대를 유지해줘.")
+        if hair_len in ("long", "very long"):
+            lines.append("머리카락 길이를 짧게 바꾸지 마. 긴 머리를 유지해줘.")
+        return " ".join(lines)
+
     def _edit_model(self) -> str:
         m = self.model.lower()
         if m.startswith("dall-e"):
@@ -230,6 +393,7 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
         used_character_sheet: bool,
         text_only: bool,
         art_style: str = "illustration",
+        feature_hint: str = "",
     ) -> str:
         prefix = _SHEET_BIBLE_KO if used_character_sheet else ""
         body = base_candidate_prompt_for_index(
@@ -240,6 +404,8 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
             art_style=art_style,
         )
         prompt = (prefix + body).strip()
+        if feature_hint:
+            prompt = prompt + " " + feature_hint
         if len(prompt) > 3900:
             prompt = prompt[:3890] + "…"
         return prompt
@@ -279,13 +445,19 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(raw)
 
+    def _edit_prompt_limit(self) -> int:
+        """dall-e-2는 1000자, gpt-image-1은 32000자 지원."""
+        m = self._edit_model().lower()
+        return 950 if m.startswith("dall-e") else 16000
+
     def _try_edit(self, client: Any, photo: Path, prompt: str) -> Any:
         bio = _prepare_image_bytes_for_edit(photo)
         edit_model = self._edit_model()
+        limit = self._edit_prompt_limit()
         return client.images.edit(
             model=edit_model,
             image=bio,
-            prompt=prompt[:950],
+            prompt=prompt[:limit],
             n=1,
             size=self.size or "1024x1024",
         )
@@ -309,6 +481,7 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
         species_hint: str,
         personality_hint: str,
         used_character_sheet: bool,
+        feature_hint: str = "",
     ) -> dict[str, Any]:
         """한 장 생성. 반환: api_phase, used_image_reference, text_only_fallback, attempts."""
         attempts: list[dict[str, Any]] = []
@@ -432,6 +605,7 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
             personality_hint=personality_hint,
             used_character_sheet=used_character_sheet,
             text_only=True,
+            feature_hint=feature_hint,
         )
 
         for attempt in range(1, self.retries + 1):
@@ -507,6 +681,22 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
         client = OpenAI()
         photo = Path(original_photo_path)
 
+        # 자동감지: species_hint가 없으면 Vision으로 분류
+        _original_hint = str(species_hint or "").strip().lower()
+        effective_species = _original_hint
+        _auto_detected = False
+        if not effective_species or effective_species == "unknown":
+            effective_species = self._auto_detect_species(client, photo)
+            _auto_detected = True
+            if effective_species != "unknown":
+                print(f"[자동감지] species_hint 자동 설정: {effective_species}", file=sys.stderr)
+        # 이후 로직에서 effective_species 사용
+        species_hint = effective_species
+
+        # 시각 특징 추출 — 닮은꼴 보존용
+        _visual_features = self._extract_visual_features(client, photo)
+        _feature_hint = self._build_feature_hint(_visual_features, species_hint)
+
         any_fallback = False
 
         for i in range(n):
@@ -522,6 +712,7 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
                 used_character_sheet=used_character_sheet,
                 text_only=text_only,
                 art_style=art_style,
+                feature_hint=_feature_hint,
             )
 
             entry: dict[str, Any] = {
@@ -546,6 +737,7 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
                 species_hint=species_hint,
                 personality_hint=personality_hint,
                 used_character_sheet=used_character_sheet,
+                feature_hint=_feature_hint,
             )
             entry["api_phase"] = render["api_phase"]
             entry["used_image_reference"] = render["used_image_reference"]
@@ -581,6 +773,9 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
         result.drift_risk_warning = result.text_only_fallback
         if any_fallback:
             result.fallback_warning = _FALLBACK_CONSOLE_WARNING
+        # 자동감지된 species를 결과에 기록 (후속 파이프라인에서 활용)
+        if _auto_detected:
+            result.detected_species = effective_species
 
         manifest = output_dir / "candidates.json"
         doc = _manifest_doc(
@@ -600,6 +795,7 @@ class OpenAICharacterCandidateGenerator(BaseCharacterCandidateGenerator):
             text_only_fallback=result.text_only_fallback,
             drift_risk_warning=result.drift_risk_warning,
             fallback_warning=result.fallback_warning,
+            visual_features=_visual_features if any(_visual_features.values()) else None,
         )
         manifest.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         result.manifest_path = manifest
@@ -624,6 +820,7 @@ def _manifest_doc(
     text_only_fallback: bool | None = None,
     drift_risk_warning: bool | None = None,
     fallback_warning: str | None = None,
+    visual_features: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     doc: dict[str, Any] = {
         "purpose": "base_character_candidates",
@@ -658,6 +855,8 @@ def _manifest_doc(
         doc["drift_risk_warning"] = drift_risk_warning
     if fallback_warning:
         doc["warning"] = fallback_warning
+    if visual_features:
+        doc["visual_features"] = visual_features
     phases = [e.get("api_phase") for e in entries if e.get("api_phase")]
     if phases:
         doc["api_phase"] = phases[0] if len(set(phases)) == 1 else "mixed"

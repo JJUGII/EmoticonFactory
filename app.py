@@ -1803,6 +1803,10 @@ def main(argv: list[str] | None = None) -> int:
             except OpenAIMissingKeyError as mk:
                 print(str(mk), file=sys.stderr)
                 return 7
+            # 자동감지 결과를 args에 반영 → 이후 파이프라인(감정 컷)에서도 동일 species 사용
+            if res.detected_species and not (args.species_hint or "").strip():
+                args.species_hint = res.detected_species
+                print(f"[자동감지] 이후 파이프라인에 species_hint={res.detected_species} 적용", file=sys.stderr)
             summary = {
                 "make_candidates": True,
                 "purpose": "base_character_candidates",
@@ -1816,6 +1820,7 @@ def main(argv: list[str] | None = None) -> int:
                 "text_only_fallback": res.text_only_fallback,
                 "drift_risk_warning": res.drift_risk_warning,
                 "fallback_warning": res.fallback_warning,
+                "detected_species": res.detected_species or None,
                 "next_step": "3장 중 1장을 --select-candidate N 으로 canonical_character.png 에 고정하세요.",
             }
             print(json.dumps(summary, ensure_ascii=False, indent=2))
