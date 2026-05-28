@@ -116,6 +116,7 @@ class PipelineService:
             candidate_openai_mode=str(job.get("candidate_openai_mode") or "auto"),
             grid_mode=True,
             art_style=str(job.get("art_style") or "illustration").strip().lower(),
+            no_text_overlay=True,
         )
 
     def _log_sink(self, job_id: str, buf: list[str]) -> Callable[[str], None]:

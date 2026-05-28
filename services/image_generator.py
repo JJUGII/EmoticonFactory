@@ -901,12 +901,16 @@ class OpenAIImageGenerator(BaseImageGenerator):
         suffix = self._SUFFIX_NO_AI_TEXT if self.no_ai_text else self._SUFFIX_AI_TEXT
 
         grid_block = (
-            "\n\n[4×4 스프라이트 시트 지시]\n"
-            "위 캐릭터로 이모티콘 16개를 4열×4행 그리드 1장으로 그려줘.\n"
-            "캔버스: 1024×1024 투명 배경 PNG (알파채널 필수).\n"
-            "셀 크기: 256×256px 균일 배열. 구분선·번호·여백 없음.\n"
+            "\n\n[4×4 스프라이트 시트 — 엄격한 셀 규칙]\n"
+            "캔버스: 1024×1024px. 정확히 4열×4행=16칸으로 분할. 각 셀=256×256px.\n"
+            "★ 핵심 규칙: 각 캐릭터는 반드시 자신의 셀 안에 완전히 들어와야 함.\n"
+            "  - 머리끝~발끝이 모두 256×256px 셀 경계 안에 포함.\n"
+            "  - 셀 경계(x=256, 512, 768 / y=256, 512, 768)를 절대 넘으면 안 됨.\n"
+            "  - 캐릭터 실제 그림 크기: 셀의 75% 이하 (최대 192×192px).\n"
+            "  - 상하좌우 여백 각 32px 이상 확보.\n"
             "모든 셀에서 동일한 캐릭터(종·얼굴·색·무늬 고정), 포즈·표정만 컷별 변경.\n"
-            "셀 순서: 좌→우, 위→아래 (Cell01=1행1열 … Cell16=4행4열).\n\n"
+            "셀 순서: 좌→우, 위→아래 (Cell01=1행1열 … Cell16=4행4열).\n"
+            "배경: 흰색 또는 투명. 구분선·번호·텍스트 없음.\n\n"
             + "\n".join(cell_lines)
             + "\n\n[AI 렌더 규칙]\n"
             + suffix
@@ -945,6 +949,7 @@ class OpenAIImageGenerator(BaseImageGenerator):
                         prompt=edit_composed[:16000],
                         n=1,
                         size=grid_size,
+                        quality="high",
                     )
                     phase = "grid.edit"
                     phase_label = f"images.edit (참조: {rf.name})"
@@ -954,6 +959,7 @@ class OpenAIImageGenerator(BaseImageGenerator):
                         prompt=composed[:4000],
                         size=grid_size,
                         n=1,
+                        quality="high",
                     )
                     phase = "grid.generate"
                     phase_label = "images.generate"

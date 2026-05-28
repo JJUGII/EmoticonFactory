@@ -381,6 +381,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--no-text-overlay",
+        action="store_true",
+        dest="no_text_overlay",
+        help="최종 PNG에 감정 텍스트 오버레이를 넣지 않음 (순수 캐릭터 이미지만 출력).",
+    )
+    p.add_argument(
         "--art-style",
         choices=("illustration", "realistic"),
         default="illustration",
@@ -2018,6 +2024,7 @@ def main(argv: list[str] | None = None) -> int:
                 visual_anchor_note = _visual_anchor_reference_note(stylizer_backend)
 
         no_ai_text = not bool(getattr(args, "ai_text", False))
+        no_text_overlay = bool(getattr(args, "no_text_overlay", False))
         effective_postprocess = bool(args.postprocess) and not no_ai_text
         if bool(args.postprocess) and no_ai_text:
             print(
@@ -2341,7 +2348,8 @@ def main(argv: list[str] | None = None) -> int:
                         processor.normalize_emoticon_to(raw_png, nt)
                         out_final = sticker_dir / f"{cut_id}.png"
                         tpos = str(item.get("text_position", "bottom"))
-                        processor.add_text_overlay(nt, out_final, text, tpos)
+                        overlay_text = "" if no_text_overlay else text
+                        processor.add_text_overlay(nt, out_final, overlay_text, tpos)
                     else:
                         processor.normalize_emoticon(raw_png)
 

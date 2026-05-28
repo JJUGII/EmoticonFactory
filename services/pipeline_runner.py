@@ -101,6 +101,7 @@ class PipelineOptions:
     candidate_openai_mode: str = "auto"
     grid_mode: bool = False
     art_style: str = "illustration"  # "illustration" | "realistic"
+    no_text_overlay: bool = False  # True → 최종 PNG에 텍스트 오버레이 없음
 
 
 @dataclass
@@ -206,6 +207,8 @@ class PipelineRunner:
             ]
         if getattr(options, "grid_mode", False):
             argv.append("--grid-mode")
+        if getattr(options, "no_text_overlay", False):
+            argv.append("--no-text-overlay")
         art_style = str(getattr(options, "art_style", "illustration")).strip().lower()
         if art_style == "realistic":
             argv += ["--art-style", "realistic"]
