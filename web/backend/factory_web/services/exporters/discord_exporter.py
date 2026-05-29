@@ -29,6 +29,22 @@ from factory_web.services.exporters.image_converter import convert_all_pngs
 DISCORD_API = "https://discord.com/api/v10"
 
 
+# ── 동적 redirect URI 헬퍼 ─────────────────────────────────────────────────
+
+def _get_redirect_uri() -> str:
+    """ngrok 실행 중이면 ngrok 퍼블릭 URL을 사용, 아니면 .env 값 사용."""
+    try:
+        import httpx
+        resp = httpx.get("http://127.0.0.1:4040/api/tunnels", timeout=2.0)
+        for tunnel in resp.json().get("tunnels", []):
+            if tunnel.get("proto") == "https":
+                base = tunnel["public_url"].rstrip("/")
+                return f"{base}/api/export/discord/callback"
+    except Exception:
+        pass
+    return os.environ.get("DISCORD_REDIRECT_URI", "")
+
+
 # ── OAuth2 헬퍼 ──────────────────────────────────────────────────────────────
 
 def get_oauth2_url(state: str) -> str:
@@ -37,7 +53,7 @@ def get_oauth2_url(state: str) -> str:
     권한: MANAGE_GUILD_EXPRESSIONS (1 << 3 = 8 + 1 << 30 = 1073741824 → 1073741832)
     """
     client_id = os.environ.get("DISCORD_CLIENT_ID", "")
-    redirect_uri = os.environ.get("DISCORD_REDIRECT_URI", "")
+    redirect_uri = _get_redirect_uri()
 
     if not client_id:
         raise RuntimeError("DISCORD_CLIENT_ID 환경변수가 없습니다.")
@@ -58,7 +74,7 @@ def exchange_code(code: str) -> dict[str, Any]:
     """OAuth2 code → access_token + guild_id."""
     client_id     = os.environ.get("DISCORD_CLIENT_ID", "")
     client_secret = os.environ.get("DISCORD_CLIENT_SECRET", "")
-    redirect_uri  = os.environ.get("DISCORD_REDIRECT_URI", "")
+    redirect_uri  = _get_redirect_uri()
 
     with httpx.Client(timeout=15.0) as client:
         resp = client.post(
