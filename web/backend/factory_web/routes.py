@@ -288,7 +288,7 @@ def export_telegram(job_id: str) -> dict:
         raise HTTPException(404, detail=str(exc)) from exc
 
     phase = doc.get("phase", "")
-    if phase != "done":
+    if phase != "completed":
         raise HTTPException(400, detail=f"이모티콘 생성이 완료되지 않았습니다. (phase={phase})")
 
     pkg_s = doc.get("package_dir")
@@ -326,7 +326,7 @@ def export_signal(job_id: str) -> dict:
     except FileNotFoundError as exc:
         raise HTTPException(404, detail=str(exc)) from exc
 
-    if doc.get("phase") != "done":
+    if doc.get("phase") != "completed":
         raise HTTPException(400, detail=f"이모티콘 생성이 완료되지 않았습니다. (phase={doc.get('phase')})")
 
     pkg_s = doc.get("package_dir")
@@ -379,7 +379,7 @@ def discord_callback(code: str = "", guild_id: str = "", state: str = "") -> dic
     except FileNotFoundError as exc:
         raise HTTPException(404, detail=f"job 없음: {job_id}") from exc
 
-    if doc.get("phase") != "done":
+    if doc.get("phase") != "completed":
         raise HTTPException(400, detail=f"이모티콘 생성이 완료되지 않았습니다. (phase={doc.get('phase')})")
 
     pkg_s = doc.get("package_dir")
@@ -412,7 +412,7 @@ def discord_upload(job_id: str, guild_id: str) -> dict:
     except FileNotFoundError as exc:
         raise HTTPException(404, detail=str(exc)) from exc
 
-    if doc.get("phase") != "done":
+    if doc.get("phase") != "completed":
         raise HTTPException(400, detail=f"이모티콘 생성이 완료되지 않았습니다. (phase={doc.get('phase')})")
 
     pkg_s = doc.get("package_dir")
