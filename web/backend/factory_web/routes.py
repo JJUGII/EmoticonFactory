@@ -362,15 +362,16 @@ def discord_bot_invite() -> dict:
 
 @router.get("/export/discord/invite/{job_id}")
 def discord_invite_url(job_id: str) -> dict:
-    """Discord 봇 초대 URL 발급 (OAuth flow, 레거시)."""
+    """Discord 봇 초대 URL 발급 — bot-invite 방식으로 통일 (redirect_uri 불필요)."""
     try:
         store.load(job_id)
     except FileNotFoundError as exc:
         raise HTTPException(404, detail=str(exc)) from exc
     try:
-        from factory_web.services.exporters.discord_exporter import get_oauth2_url
-        url = get_oauth2_url(state=job_id)
-        return {"platform": "discord", "oauth2_url": url}
+        from factory_web.services.exporters.discord_exporter import get_bot_invite_url
+        url = get_bot_invite_url()
+        # oauth2_url 필드 유지 (구 프론트엔드 호환)
+        return {"platform": "discord", "oauth2_url": url, "bot_invite_url": url}
     except RuntimeError as e:
         raise HTTPException(500, detail=str(e)) from e
 
