@@ -190,6 +190,31 @@ export function downloadZipUrl(jobId: string): string {
   return apiUrl(`/api/download/${jobId}`);
 }
 
+// ── 플랫폼 내보내기 ────────────────────────────────────────────────────────
+
+export async function exportToTelegram(jobId: string): Promise<{ link: string; cached: boolean }> {
+  const res = await fetch(apiUrl(`/api/export/telegram/${jobId}`), {
+    method: "POST",
+    ...ngrokRequestHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Telegram 내보내기 실패");
+  }
+  return res.json();
+}
+
+export async function getDiscordInviteUrl(jobId: string): Promise<{ oauth2_url: string }> {
+  const res = await fetch(apiUrl(`/api/export/discord/invite/${jobId}`), {
+    ...ngrokRequestHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Discord 초대 URL 생성 실패");
+  }
+  return res.json();
+}
+
 export function pollJob(
   jobId: string,
   onUpdate: (s: JobStatus) => void,
