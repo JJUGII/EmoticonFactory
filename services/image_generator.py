@@ -940,7 +940,7 @@ class OpenAIImageGenerator(BaseImageGenerator):
         ) from outer_last
 
     # ──────────────────────────────────────────────────────────────────
-    # 그리드 모드: 16컷을 4×4 스프라이트 시트 1장으로 생성 후 크롭
+    # 그리드 모드: 16컷을 4배치×2×2 스프라이트 시트로 생성 후 크롭
     # ──────────────────────────────────────────────────────────────────
     def generate_grid(
         self,
@@ -948,12 +948,12 @@ class OpenAIImageGenerator(BaseImageGenerator):
         raw_out_dir: Path,
         reference_path: Path | None = None,
     ) -> tuple[dict[str, Path], list[str]]:
-        """16컷을 4×4 그리드 이미지 1장(API 1회)으로 생성 후 개별 셀 크롭.
+        """16컷을 4배치의 2×2 그리드(배치당 API 1회)로 생성 후 개별 셀 크롭.
 
         Args:
             cut_payloads: [{"item": dict, "prompt": str}, ...] (최대 16개)
             raw_out_dir:  크롭된 셀 PNG를 저장할 디렉터리
-            reference_path: 참조 캐릭터 이미지 경로 (프롬프트 힌트용, 현재 images.generate 사용)
+            reference_path: 참조 캐릭터 이미지 경로
 
         Returns:
             (succeeded={cut_id: path}, failed=[cut_id, ...])
@@ -965,113 +965,114 @@ class OpenAIImageGenerator(BaseImageGenerator):
         raw_out_dir.mkdir(parents=True, exist_ok=True)
         self.last_attempt_logs = []
 
-        ROWS, COLS = 4, 4
-        cuts = cut_payloads[: ROWS * COLS]
+        BATCH_ROWS, BATCH_COLS = 2, 2
+        BATCH_SIZE = BATCH_ROWS * BATCH_COLS
+        grid_size = "1024x1024"
+        cell_dim = 1024 // BATCH_COLS   # = 512
 
-        # ── 1. 프롬프트 구성 ──────────────────────────────────────────
-        # text-only(generate) 모드 전용: 첫 번째 컷의 캐릭터 정체성 블록
-        base_prompt = (cuts[0]["prompt"] if cuts else "").strip()
+        all_cuts = cut_payloads[:16]
+        batches = [all_cuts[i:i+BATCH_SIZE] for i in range(0, len(all_cuts), BATCH_SIZE)]
 
-        cell_lines: list[str] = []
-        for idx, row in enumerate(cuts):
-            it = row["item"]
-            r_num, c_num = divmod(idx, COLS)
-            r_num += 1
-            c_num += 1
-            emotion   = str(it.get("emotion", ""))
-            body_pose = str(it.get("body_pose", ""))
-            action    = str(it.get("action", ""))
-            prop      = str(it.get("prop", "none"))
-            prop_note = f", prop={prop}" if prop and prop.lower() not in ("none", "") else ""
-            cell_lines.append(
-                f"Cell{idx + 1:02d}({r_num}r{c_num}c):"
-                f" {emotion} / {body_pose} / {action}{prop_note}"
+        client = OpenAI()
+        rf = Path(reference_path) if reference_path else None
+        ref_ok_base = rf is not None and rf.is_file() and self._try_edit_first()
+
+        succeeded: dict[str, Path] = {}
+        failed: list[str] = []
+
+        for batch_idx, batch_cuts in enumerate(batches):
+            if not batch_cuts:
+                continue
+
+            # --- build cell lines for this 2×2 batch ---
+            cell_lines: list[str] = []
+            for local_idx, row in enumerate(batch_cuts):
+                it = row["item"]
+                r_num, c_num = divmod(local_idx, BATCH_COLS)
+                r_num += 1; c_num += 1
+                emotion   = str(it.get("emotion", ""))
+                body_pose = str(it.get("body_pose", ""))
+                action    = str(it.get("action", ""))
+                prop      = str(it.get("prop", "none"))
+                prop_note = f", prop={prop}" if prop and prop.lower() not in ("none", "") else ""
+                cell_lines.append(
+                    f"Cell{local_idx+1:02d}({r_num}r{c_num}c):"
+                    f" {emotion} / {body_pose} / {action}{prop_note}"
+                )
+
+            suffix = self._SUFFIX_NO_AI_TEXT if self.no_ai_text else self._SUFFIX_AI_TEXT
+            base_prompt = (batch_cuts[0]["prompt"] if batch_cuts else "").strip()
+
+            edit_grid_layout = (
+                "\n\n[2×2 스프라이트 시트 — 엄격한 셀 규칙]\n"
+                "캔버스: 1024×1024px. 정확히 2열×2행=4칸으로 분할. 각 셀=512×512px.\n"
+                "★ 핵심 규칙: 각 캐릭터는 반드시 자신의 셀 안에 완전히 들어와야 함.\n"
+                "  - 셀 경계(x=512 / y=512)를 절대 넘으면 안 됨.\n"
+                "  - 뷰: 얼굴 클로즈업 위주(얼굴+어깨 정도). 하체·발·전신 표현 금지.\n"
+                f"  - 캐릭터 실제 그림 크기: 셀의 80% 이하 (최대 410×410px). 상하좌우 여백 50px+.\n"
+                "모든 셀에서 동일한 캐릭터(종·얼굴·색·무늬 고정), 포즈·표정만 컷별 변경.\n"
+                "셀 순서: 좌→우, 위→아래 (Cell01=1행1열 … Cell04=2행2열).\n"
+                "배경: 흰색. 구분선·번호·텍스트 없음.\n\n"
+                + "\n".join(cell_lines)
+                + "\n\n"
+                + self._SUFFIX_EDIT_GRID
             )
 
-        suffix = self._SUFFIX_NO_AI_TEXT if self.no_ai_text else self._SUFFIX_AI_TEXT
+            gen_grid_layout = (
+                "\n\n[2×2 스프라이트 시트 — 엄격한 셀 규칙]\n"
+                "캔버스: 1024×1024px. 정확히 2열×2행=4칸으로 분할. 각 셀=512×512px.\n"
+                "★ 핵심 규칙: 각 캐릭터는 반드시 자신의 셀 안에 완전히 들어와야 함.\n"
+                "  - 셀 경계(x=512 / y=512)를 절대 넘으면 안 됨.\n"
+                f"  - 캐릭터 크기 셀의 80% 이하, 여백 50px+.\n"
+                "모든 셀 동일 캐릭터, 포즈·표정만 변경. 셀 순서: 좌→우, 위→아래.\n\n"
+                + "\n".join(cell_lines)
+                + "\n\n[AI 렌더 규칙]\n"
+                + suffix
+            )
 
-        # images.edit용 그리드 레이아웃: gpt-image-1 images.edit 지원 크기 = 1024×1024 only (square)
-        edit_grid_layout = (
-            "\n\n[4×4 스프라이트 시트 — 엄격한 셀 규칙]\n"
-            "캔버스: 1024×1024px. 정확히 4열×4행=16칸으로 분할. 각 셀=256×256px.\n"
-            "★ 핵심 규칙: 각 캐릭터는 반드시 자신의 셀 안에 완전히 들어와야 함.\n"
-            "  - 셀 경계(x=256,512,768 / y=256,512,768)를 절대 넘으면 안 됨.\n"
-            "  - 뷰: 얼굴 클로즈업 위주(얼굴+어깨 정도). 하체·발·전신 표현 금지.\n"
-            "  - 캐릭터 실제 그림 크기: 셀의 80% 이하 (최대 200×200px). 상하좌우 여백 28px+.\n"
-            "모든 셀에서 동일한 캐릭터(종·얼굴·색·무늬 고정), 포즈·표정만 컷별 변경.\n"
-            "셀 순서: 좌→우, 위→아래 (Cell01=1행1열 … Cell16=4행4열).\n"
-            "배경: 흰색. 구분선·번호·텍스트 없음.\n\n"
-            + "\n".join(cell_lines)
-            + "\n\n"
-            + self._SUFFIX_EDIT_GRID
-        )
+            edit_base = (
+                "첨부된 참조 이미지의 캐릭터를 그대로 사용해줘.\n"
+                "캐릭터의 외모(얼굴형·눈·헤어스타일·색상·아트 스타일)를 참조 이미지와 완전히 동일하게 유지.\n"
+                "강아지·고양이·곰·다른 동물로 절대 바꾸지 마. 참조 이미지 속 캐릭터 그대로.\n"
+                "포즈·표정·감정만 각 셀 지시에 따라 변경.\n"
+            )
+            edit_composed = edit_base + edit_grid_layout
+            composed = base_prompt + gen_grid_layout
 
-        # images.generate용 그리드 레이아웃: 스타일 suffix 포함
-        gen_grid_layout = (
-            "\n\n[4×4 스프라이트 시트 — 엄격한 셀 규칙]\n"
-            "캔버스: 1024×1024px. 정확히 4열×4행=16칸으로 분할. 각 셀=256×256px.\n"
-            "★ 핵심 규칙: 각 캐릭터는 반드시 자신의 셀 안에 완전히 들어와야 함.\n"
-            "  - 셀 경계(x=256,512,768 / y=256,512,768)를 절대 넘으면 안 됨.\n"
-            "  - 캐릭터 크기 셀의 80% 이하, 여백 28px+.\n"
-            "모든 셀 동일 캐릭터, 포즈·표정만 변경. 셀 순서: 좌→우, 위→아래.\n\n"
-            + "\n".join(cell_lines)
-            + "\n\n[AI 렌더 규칙]\n"
-            + suffix
-        )
+            tmp_grid = raw_out_dir / f"_grid_raw_batch{batch_idx:02d}.png"
+            ref_ok = ref_ok_base
 
-        # images.edit용: 단순 직접 프롬프트 — 참조 이미지가 캐릭터를 정의, 스타일 묘사 최소화
-        edit_base = (
-            "첨부된 참조 이미지의 캐릭터를 그대로 사용해줘.\n"
-            "캐릭터의 외모(얼굴형·눈·헤어스타일·색상·아트 스타일)를 참조 이미지와 완전히 동일하게 유지.\n"
-            "강아지·고양이·곰·다른 동물로 절대 바꾸지 마. 참조 이미지 속 캐릭터 그대로.\n"
-            "포즈·표정·감정만 각 셀 지시에 따라 변경.\n"
-        )
-        edit_composed = edit_base + edit_grid_layout
-
-        # images.generate용 (text-only): base_prompt 포함
-        composed = base_prompt + gen_grid_layout
-
-        # ── 2. API 호출 (images.edit 우선, 실패 시 images.generate 폴백) ──
-        # gpt-image-1 images.edit 지원 크기: 1024x1024 (square only)
-        grid_size = "1024x1024"
-        client = OpenAI()
-        tmp_grid = raw_out_dir / "_grid_raw.png"
-
-        rf = Path(reference_path) if reference_path else None
-        ref_ok = rf is not None and rf.is_file() and self._try_edit_first()
-
-        outer_exc: Exception | None = None
-        call_ok = False
-        for attempt in range(1, self.retries + 1):
-            st = time.perf_counter()
-            try:
-                if ref_ok:
-                    assert rf is not None
-                    bio = _prepare_image_bytes_for_edit(rf)
-                    em = self._edit_api_model()
-                    resp = client.images.edit(
-                        model=em,
-                        image=bio,
-                        prompt=edit_composed[:16000],
-                        n=1,
-                        size=grid_size,
-                        quality="high",
-                    )
-                    phase = "grid.edit"
-                    phase_label = f"images.edit (참조: {rf.name})"
-                else:
-                    resp = client.images.generate(
-                        model=self.model,
-                        prompt=composed[:4000],
-                        size=grid_size,
-                        n=1,
-                        quality="high",
-                    )
-                    phase = "grid.generate"
-                    phase_label = "images.generate"
-                ms = (time.perf_counter() - st) * 1000
-                self.last_attempt_logs.append(
-                    {
+            outer_exc: Exception | None = None
+            call_ok = False
+            for attempt in range(1, self.retries + 1):
+                st = time.perf_counter()
+                try:
+                    if ref_ok:
+                        assert rf is not None
+                        bio = _prepare_image_bytes_for_edit(rf)
+                        em = self._edit_api_model()
+                        resp = client.images.edit(
+                            model=em,
+                            image=bio,
+                            prompt=edit_composed[:16000],
+                            n=1,
+                            size=grid_size,
+                            quality="high",
+                        )
+                        phase = f"grid.edit.b{batch_idx}"
+                        phase_label = f"images.edit 배치{batch_idx+1} (참조: {rf.name})"
+                    else:
+                        resp = client.images.generate(
+                            model=self.model,
+                            prompt=composed[:4000],
+                            size=grid_size,
+                            n=1,
+                            quality="high",
+                        )
+                        phase = f"grid.generate.b{batch_idx}"
+                        phase_label = f"images.generate 배치{batch_idx+1}"
+                    ms = (time.perf_counter() - st) * 1000
+                    self.last_attempt_logs.append({
                         "attempt": attempt,
                         "phase": phase,
                         "success": True,
@@ -1080,111 +1081,87 @@ class OpenAIImageGenerator(BaseImageGenerator):
                         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
                         "usage": _serialize_usage(resp),
                         "grid_size": grid_size,
-                        "cells": len(cuts),
-                    }
-                )
-                self._decode_response(resp, tmp_grid)
-                print(
-                    f"[그리드] {phase_label} 완료 ({ms / 1000:.1f}s, {grid_size}, {len(cuts)}셀)",
-                    file=_sys.stderr,
-                )
-                call_ok = True
-                break
-            except Exception as e:
-                ms = (time.perf_counter() - st) * 1000
-                outer_exc = e
-                # images.edit 실패 → images.generate 로 폴백
-                if ref_ok:
+                        "batch": batch_idx,
+                        "cells": len(batch_cuts),
+                    })
+                    self._decode_response(resp, tmp_grid)
                     print(
-                        f"[그리드] images.edit 실패 → images.generate 폴백: {e!r}",
+                        f"[그리드] {phase_label} 완료 ({ms/1000:.1f}s, {grid_size}, {len(batch_cuts)}셀)",
                         file=_sys.stderr,
                     )
-                    ref_ok = False
-                    continue
-                self.last_attempt_logs.append(
-                    {
+                    call_ok = True
+                    break
+                except Exception as e:
+                    ms = (time.perf_counter() - st) * 1000
+                    outer_exc = e
+                    if ref_ok:
+                        print(f"[그리드] 배치{batch_idx+1} images.edit 실패 → images.generate 폴백: {e!r}", file=_sys.stderr)
+                        ref_ok = False
+                        continue
+                    self.last_attempt_logs.append({
                         "attempt": attempt,
-                        "phase": "grid.generate",
+                        "phase": f"grid.generate.b{batch_idx}",
                         "success": False,
                         "latency_ms": round(ms, 2),
                         "wall_seconds": round(ms / 1000.0, 4),
                         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-                        "error": "".join(
-                            traceback.format_exception_only(type(e), e)
-                        ).strip(),
-                    }
-                )
+                        "error": "".join(traceback.format_exception_only(type(e), e)).strip(),
+                    })
+                    print(f"[그리드] 배치{batch_idx+1} attempt {attempt}/{self.retries} 실패: {e!r}", file=_sys.stderr)
+                    if attempt < self.retries:
+                        time.sleep(min(8.0, 2**attempt))
+
+            if not call_ok:
+                # mark all cuts in this batch as failed
+                for row in batch_cuts:
+                    cid = str(row["item"].get("id", "??"))
+                    failed.append(cid)
+                print(f"[그리드] 배치{batch_idx+1} 완전 실패 — {len(batch_cuts)}컷 fallback", file=_sys.stderr)
+                continue
+
+            # --- crop the 2×2 grid ---
+            try:
+                grid_img = Image.open(tmp_grid).convert("RGBA")
+                gw, gh = grid_img.size
+                cell_w = gw // BATCH_COLS
+                cell_h = gh // BATCH_ROWS
                 print(
-                    f"[그리드] attempt {attempt}/{self.retries} 실패: {e!r}",
+                    f"[그리드] 배치{batch_idx+1}: 그리드 {gw}×{gh}px → 셀 {cell_w}×{cell_h}px",
                     file=_sys.stderr,
                 )
-                if attempt < self.retries:
-                    time.sleep(min(8.0, 2**attempt))
+                grid_arr = _np.array(grid_img)
+                row_starts = _detect_row_starts(grid_arr, BATCH_ROWS, cell_h)
+                col_starts = _detect_col_starts(grid_arr, BATCH_COLS, cell_w)
 
-        if not call_ok:
-            raise RuntimeError(
-                f"[그리드] OpenAI 그리드 이미지 생성 실패: {outer_exc!s}"
-            ) from outer_exc
-
-        # ── 3. 셀 크롭 ───────────────────────────────────────────────
-        succeeded: dict[str, Path] = {}
-        failed: list[str] = []
-
-        try:
-            grid_img = Image.open(tmp_grid).convert("RGBA")
-            gw, gh = grid_img.size
-            cell_w = gw // COLS
-            cell_h = gh // ROWS
-            print(
-                f"[그리드] 그리드 {gw}×{gh}px → 셀 {cell_w}×{cell_h}px",
-                file=_sys.stderr,
-            )
-
-            # 스마트 행/열 시작점 감지: AI가 셀 경계를 넘어 캐릭터를 그리는 경우
-            # 배경 갭(흰색 공백)을 찾아 실제 캐릭터 위치로 크롭 창을 보정
-            grid_arr = _np.array(grid_img)
-            row_starts = _detect_row_starts(grid_arr, ROWS, cell_h)
-            col_starts = _detect_col_starts(grid_arr, COLS, cell_w)
-
-            for idx, row in enumerate(cuts):
-                cid = str(row["item"].get("id", f"{idx + 1:02d}"))
-                r, c = divmod(idx, COLS)
-                x0 = col_starts[c]
-                x1 = min(x0 + cell_w, gw)
-                y0 = row_starts[r]
-                y1 = min(y0 + cell_h, gh)
-                try:
-                    cell = grid_img.crop((x0, y0, x1, y1))
-                    # 크롭이 목표 크기보다 작으면 흰색으로 패딩
-                    if cell.size[0] < cell_w or cell.size[1] < cell_h:
-                        padded = Image.new("RGBA", (cell_w, cell_h), (255, 255, 255, 255))
-                        padded.paste(cell, (0, 0))
-                        cell = padded
-                    cell_path = raw_out_dir / f"{cid}.png"
-                    cell.save(cell_path, format="PNG")
-                    succeeded[cid] = cell_path
-                except Exception as crop_e:
-                    print(
-                        f"[그리드] 셀 {cid} 크롭 실패: {crop_e!r}",
-                        file=_sys.stderr,
-                    )
+                for local_idx, row in enumerate(batch_cuts):
+                    cid = str(row["item"].get("id", f"{local_idx+1:02d}"))
+                    r, c = divmod(local_idx, BATCH_COLS)
+                    x0 = col_starts[c]
+                    x1 = min(x0 + cell_w, gw)
+                    y0 = row_starts[r]
+                    y1 = min(y0 + cell_h, gh)
+                    try:
+                        cell = grid_img.crop((x0, y0, x1, y1))
+                        if cell.size[0] < cell_w or cell.size[1] < cell_h:
+                            padded = Image.new("RGBA", (cell_w, cell_h), (255, 255, 255, 255))
+                            padded.paste(cell, (0, 0))
+                            cell = padded
+                        cell_path = raw_out_dir / f"{cid}.png"
+                        cell.save(cell_path, format="PNG")
+                        succeeded[cid] = cell_path
+                    except Exception as crop_e:
+                        print(f"[그리드] 셀 {cid} 크롭 실패: {crop_e!r}", file=_sys.stderr)
+                        failed.append(cid)
+            except Exception as e:
+                print(f"[그리드] 배치{batch_idx+1} 크롭 전체 실패: {e!r}", file=_sys.stderr)
+                for row in batch_cuts:
+                    cid = str(row["item"].get("id", "??"))
                     failed.append(cid)
 
-            print(
-                f"[그리드] 크롭 완료: {len(succeeded)}성공 / {len(failed)}실패",
-                file=_sys.stderr,
-            )
-        except Exception as e:
-            print(
-                f"[그리드] 크롭 전체 실패: {e!r} — 전체 컷 fallback",
-                file=_sys.stderr,
-            )
-            failed = [
-                str(row["item"].get("id", f"{i + 1:02d}"))
-                for i, row in enumerate(cuts)
-            ]
-            succeeded = {}
-
+        print(
+            f"[그리드] 크롭 완료: {len(succeeded)}성공 / {len(failed)}실패",
+            file=_sys.stderr,
+        )
         return succeeded, failed
 
     def _decode_response(self, resp, output_path: Path) -> None:

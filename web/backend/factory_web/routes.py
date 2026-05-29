@@ -273,6 +273,165 @@ def download_zip(job_id: str) -> StreamingResponse:
     )
 
 
+# ── 플랫폼 내보내기 엔드포인트 ──────────────────────────────────────────────
+
+@router.post("/export/telegram/{job_id}")
+def export_telegram(job_id: str) -> dict:
+    """Telegram 스티커팩 생성 후 설치 링크 반환.
+
+    환경변수 필요:
+      TELEGRAM_BOT_TOKEN, TELEGRAM_SERVICE_USER_ID
+    """
+    try:
+        doc = store.load(job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+
+    phase = doc.get("phase", "")
+    if phase != "done":
+        raise HTTPException(400, detail=f"이모티콘 생성이 완료되지 않았습니다. (phase={phase})")
+
+    pkg_s = doc.get("package_dir")
+    if not pkg_s:
+        raise HTTPException(400, detail="패키지 경로가 없습니다.")
+
+    # 이미 생성된 링크가 있으면 바로 반환
+    if cached := doc.get("telegram_link"):
+        return {"platform": "telegram", "link": cached, "cached": True}
+
+    emotions: list[str] = doc.get("emotions") or []
+    series_name: str = doc.get("series_name") or "MySticker"
+
+    try:
+        from factory_web.services.exporters.telegram_exporter import export_for_job
+        link = export_for_job(job_id, pkg_s, emotions, series_name)
+    except RuntimeError as e:
+        raise HTTPException(500, detail=str(e)) from e
+
+    # 링크 job.json에 캐시
+    store.update(job_id, telegram_link=link)
+
+    return {"platform": "telegram", "link": link, "cached": False}
+
+
+@router.post("/export/signal/{job_id}")
+def export_signal(job_id: str) -> dict:
+    """Signal 스티커팩 업로드 후 signal.art 설치 링크 반환.
+
+    환경변수 필요:
+      SIGNAL_USERNAME, SIGNAL_PASSWORD
+    """
+    try:
+        doc = store.load(job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+
+    if doc.get("phase") != "done":
+        raise HTTPException(400, detail=f"이모티콘 생성이 완료되지 않았습니다. (phase={doc.get('phase')})")
+
+    pkg_s = doc.get("package_dir")
+    if not pkg_s:
+        raise HTTPException(400, detail="패키지 경로가 없습니다.")
+
+    if cached := doc.get("signal_link"):
+        return {"platform": "signal", "link": cached, "cached": True}
+
+    emotions: list[str] = doc.get("emotions") or []
+    series_name: str = doc.get("series_name") or "MySticker"
+
+    try:
+        from factory_web.services.exporters.signal_exporter import export_for_job
+        link = export_for_job(job_id, pkg_s, emotions, series_name)
+    except RuntimeError as e:
+        raise HTTPException(500, detail=str(e)) from e
+
+    store.update(job_id, signal_link=link)
+    return {"platform": "signal", "link": link, "cached": False}
+
+
+@router.get("/export/discord/invite/{job_id}")
+def discord_invite_url(job_id: str) -> dict:
+    """Discord 봇 초대 URL 발급."""
+    try:
+        store.load(job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+    try:
+        from factory_web.services.exporters.discord_exporter import get_oauth2_url
+        url = get_oauth2_url(state=job_id)
+        return {"platform": "discord", "oauth2_url": url}
+    except RuntimeError as e:
+        raise HTTPException(500, detail=str(e)) from e
+
+
+@router.get("/export/discord/callback")
+def discord_callback(code: str = "", guild_id: str = "", state: str = "") -> dict:
+    """Discord OAuth2 callback — code 교환 후 스티커 자동 업로드.
+
+    Discord가 리디렉션할 때 ?code=...&guild_id=...&state=job_id 형태로 전달.
+    """
+    if not code or not guild_id or not state:
+        raise HTTPException(400, detail="code / guild_id / state 파라미터가 필요합니다.")
+
+    job_id = state
+    try:
+        doc = store.load(job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, detail=f"job 없음: {job_id}") from exc
+
+    if doc.get("phase") != "done":
+        raise HTTPException(400, detail=f"이모티콘 생성이 완료되지 않았습니다. (phase={doc.get('phase')})")
+
+    pkg_s = doc.get("package_dir")
+    if not pkg_s:
+        raise HTTPException(400, detail="패키지 경로가 없습니다.")
+
+    emotions: list[str] = doc.get("emotions") or []
+    series_name: str = doc.get("series_name") or "MySticker"
+
+    try:
+        from factory_web.services.exporters.discord_exporter import (
+            exchange_code,
+            export_for_job,
+        )
+        # code → token (guild_id 확인용, 실제 업로드는 봇 토큰으로)
+        exchange_code(code)  # 토큰 교환 (에러 확인 목적)
+        result = export_for_job(job_id, guild_id, pkg_s, emotions, series_name)
+    except RuntimeError as e:
+        raise HTTPException(500, detail=str(e)) from e
+
+    store.update(job_id, discord_guild_id=guild_id, discord_uploaded=result["uploaded_count"])
+    return {"platform": "discord", "message": "스티커 업로드 완료!", **result}
+
+
+@router.post("/export/discord/upload/{job_id}")
+def discord_upload(job_id: str, guild_id: str) -> dict:
+    """guild_id를 직접 전달해 스티커 업로드 (테스트/재업로드용)."""
+    try:
+        doc = store.load(job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+
+    if doc.get("phase") != "done":
+        raise HTTPException(400, detail=f"이모티콘 생성이 완료되지 않았습니다. (phase={doc.get('phase')})")
+
+    pkg_s = doc.get("package_dir")
+    if not pkg_s:
+        raise HTTPException(400, detail="패키지 경로가 없습니다.")
+
+    emotions: list[str] = doc.get("emotions") or []
+    series_name: str = doc.get("series_name") or "MySticker"
+
+    try:
+        from factory_web.services.exporters.discord_exporter import export_for_job
+        result = export_for_job(job_id, guild_id, pkg_s, emotions, series_name)
+    except RuntimeError as e:
+        raise HTTPException(500, detail=str(e)) from e
+
+    store.update(job_id, discord_guild_id=guild_id, discord_uploaded=result["uploaded_count"])
+    return {"platform": "discord", **result}
+
+
 @router.get("/files/{job_id}/{file_path:path}")
 def serve_file(job_id: str, file_path: str) -> FileResponse:
     job_base = store.job_dir(job_id).resolve()

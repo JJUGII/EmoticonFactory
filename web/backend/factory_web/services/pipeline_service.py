@@ -56,12 +56,196 @@ def _package_dir(job: dict[str, Any], store: JobStore) -> Path:
     return store.output_root(str(job["job_id"])) / folder
 
 
+# ── 감정 → 템플릿 매칭 테이블 ────────────────────────────────────────────
+# 각 튜플: (감정 키워드들, 선호 템플릿 0-기반 인덱스들(우선순위 순))
+# 템플릿 감정: 0=따뜻한애정, 1=애틋함, 2=애교, 3=기쁨, 4=서운함,
+#              5=질투, 6=설렘, 7=달콤함, 8=호기심, 9=평온,
+#              10=감사, 11=미안함, 12=무기력, 13=동의, 14=짜증, 15=과한애정
+_EMOTION_TEMPLATE_PREFS: list[tuple[tuple[str, ...], tuple[int, ...]]] = [
+    # ── 사랑/애정 계열 ──
+    (("사랑해", "사랑", "love", "하트폭격", "사랑스"),     (0, 15)),
+    (("보고싶", "그리워", "miss", "보고싶어"),             (1, 4)),
+    (("안아줘", "안아", "hug", "안아달라", "안겨"),         (2, 0)),
+    (("좋아", "좋아해", "like", "좋음"),                   (6, 3, 15)),
+    (("뽀뽀", "키스", "kiss", "달콤", "입맞"),             (7,)),
+    (("윙크", "wink", "눈짓", "시크"),                     (7, 5)),
+    (("설레", "두근", "심쿵", "flutter", "두근두근"),       (6, 3)),
+
+    # ── 감사/미안 계열 ──
+    (("고마워", "감사", "thank", "고마", "고맙"),           (10, 2)),
+    (("미안해", "미안", "sorry", "잘못", "사과"),           (11, 4)),
+
+    # ── 긍정/기쁨 계열 ──
+    (("행복해", "행복", "happy", "기뻐", "기쁘"),           (3, 6)),
+    (("대박", "와우", "wow", "굿", "good", "짱"),           (6, 15, 3)),
+    (("귀여워", "귀엽", "cute", "kawaii"),                  (2, 3)),
+    (("뿌잉", "냥냥", "멍멍", "삐용"),                     (2, 6)),   # 애교/귀여운 소리
+    (("화이팅", "파이팅", "응원해", "응원", "힘내"),        (15, 6)),
+
+    # ── 부정/짜증/서운함 계열 ──
+    (("화났어", "화나", "angry", "킹받", "짜증", "빡"),     (14, 5)),
+    (("가지마", "가지말", "떠나지", "가면안"),              (4, 1)),
+    (("눈물", "울어", "슬퍼", "울고싶", "cry", "슬픔"),     (4, 11)),
+    (("힘들어", "힘들", "지쳐", "지친"),                    (12, 4)),
+    (("질투", "부럽", "jealous"),                           (5,)),
+
+    # ── 놀람/호기심 계열 ──
+    (("놀랐어", "놀람", "surprised", "깜짝", "놀라", "헉"), (6, 5, 3)),
+    (("뭐해", "궁금", "호기심", "어떻게", "왜"),            (8,)),
+
+    # ── 수면/휴식 계열 ──
+    (("졸려", "sleepy", "피곤", "졸리"),                    (9,)),
+    (("잘자", "goodnight", "자요", "자자", "쿨쿨", "zzz"), (9, 7, 0)),
+    (("배고파", "hungry", "먹고싶", "배고"),                (8, 4, 12)),
+    (("심심해", "심심", "bored", "귀찮", "무기력"),         (12, 8)),
+    (("축하해", "축하", "celebr", "만세"),                  (15, 6, 3)),
+
+    # ── 기타 ──
+    (("인정", "동의", "맞아", "okay", "ㅇㅇ"),              (13,)),
+    (("부끄", "수줍", "쑥쓰", "shy"),                       (3, 7)),   # 눈 감고 볼 빨개짐
+    (("으쓱", "뿌듯", "자랑"),                              (15, 6)),
+]
+
+# 특정 감정에 대한 emotion 레이블 + 포즈/표정 보정 오버라이드
+_EMOTION_POSE_OVERRIDES: dict[str, dict[str, str]] = {
+    "배고파": {
+        "emotion": "배고픔",
+        "facial_expression": "눈이 반쯤 풀리고 입꼬리 처짐, 배고픔에 맥 빠진 표정",
+        "action": "배를 두 손으로 감싸며 고개를 살짝 숙임",
+        "body_pose": "한쪽 손을 배에 얹고 정면을 바라보는 기운 없는 자세",
+        "motion_hint": "배 부분 손이 배고픔에 살짝 떨림",
+    },
+    "놀랐어": {
+        "emotion": "놀람",
+        "facial_expression": "눈 크게 뜨고 입 살짝 벌린 놀란 표정, 동공 확장",
+        "action": "두 손을 볼 옆에 들어올리며 뒤로 살짝 젖히는 놀람 반응",
+        "body_pose": "상체를 살짝 뒤로 빼며 놀란 자세",
+        "motion_hint": "놀라서 상체가 짧게 뒤로 한 번 젖혀짐",
+        "prop": "none",
+    },
+    "응원해": {
+        "emotion": "응원/열정",
+        "facial_expression": "활짝 웃으며 힘차게 응원하는 밝은 표정",
+        "action": "두 손 주먹 쥐고 힘차게 들어올리는 응원 동작",
+        "body_pose": "두 팔을 위로 힘차게 든 응원 포즈, 정면 바라봄",
+        "motion_hint": "팔이 한 번 크게 위로 올라갔다 내려옴",
+    },
+    "축하해": {
+        "emotion": "축하/기쁨",
+        "facial_expression": "크게 활짝 웃으며 축하하는 환한 표정",
+        "action": "양손을 위로 번쩍 들어올리며 만세 동작, 폭죽이나 하트 비산",
+        "body_pose": "두 팔 위로 들어올린 만세 자세, 전신 들뜬 기운",
+        "motion_hint": "배경에서 하트·폭죽·별 같은 반짝임이 터짐",
+        "prop": "heart_shower",
+    },
+    "잘자": {
+        "emotion": "평온/수면",
+        "facial_expression": "눈 감고 부드러운 미소, 편안한 수면 표정",
+        "action": "두 손을 볼 옆에 모아 대고 고개 살짝 기울임",
+        "body_pose": "눈 감고 양손을 볼에 모은 잘자 포즈",
+        "motion_hint": "머리 위에서 Zzz 문양이 살짝 떠오름",
+        "prop": "none",
+    },
+}
+
+
+def _score_emotion_template(emotion: str, tmpl_idx: int) -> int:
+    """감정 텍스트 ↔ 템플릿 인덱스 적합도.
+
+    점수 체계:
+      100-80  하드코딩 _EMOTION_TEMPLATE_PREFS (1순위·2순위)
+      60      GPT 확장 키워드 (emotion_auto_tune.score_expanded)
+      0       미매칭
+    임베딩 폴백(40점)은 _match_emotions_to_templates() 에서 단어 단위로 처리.
+    """
+    emo = emotion.strip().lower()
+    # ── 1: 하드코딩 키워드 테이블 ──
+    for keywords, prefs in _EMOTION_TEMPLATE_PREFS:
+        if any(kw in emo for kw in keywords):
+            if tmpl_idx in prefs:
+                return 100 - list(prefs).index(tmpl_idx) * 20
+    # ── 2: GPT 확장 키워드 (초기화 완료 시에만) ──
+    try:
+        from factory_web.services import emotion_auto_tune  # noqa: PLC0415
+        return emotion_auto_tune.score_expanded(emotion, tmpl_idx)
+    except Exception:
+        return 0
+
+
+def _match_emotions_to_templates(emotions: list[str], n: int = 16) -> list[int]:
+    """각 감정 → 최적 템플릿 인덱스(0-based) 그리디 최대 매칭.
+
+    1) 하드코딩 + GPT 확장 키워드 점수로 그리디 배정
+    2) 여전히 None인 감정 → 임베딩 cosine similarity (단어당 API 1회)
+    3) 그래도 None → 남은 템플릿 순서 폴백
+    """
+    scores: list[tuple[int, int, int]] = []
+    for ei, emo in enumerate(emotions[:n]):
+        for ti in range(n):
+            s = _score_emotion_template(emo, ti)
+            if s > 0:
+                scores.append((-s, ei, ti))
+    scores.sort()
+
+    result: list[int | None] = [None] * len(emotions)
+    used_emos: set[int] = set()
+    used_tmpl: set[int] = set()
+    for _, ei, ti in scores:
+        if ei in used_emos or ti in used_tmpl:
+            continue
+        result[ei] = ti
+        used_emos.add(ei)
+        used_tmpl.add(ti)
+
+    # ── 임베딩 폴백: 키워드 미매칭 단어만 처리 ──
+    unmatched = [ei for ei in range(len(emotions)) if result[ei] is None]
+    if unmatched:
+        try:
+            from factory_web.services import emotion_auto_tune  # noqa: PLC0415
+            for ei in unmatched:
+                idx = emotion_auto_tune.best_by_embedding(
+                    emotions[ei], exclude_idxs=set(used_tmpl)
+                )
+                if idx is not None:
+                    result[ei] = idx
+                    used_emos.add(ei)
+                    used_tmpl.add(idx)
+        except Exception:
+            pass
+
+    # ── 순서 폴백 ──
+    remaining = [i for i in range(n) if i not in used_tmpl]
+    for ei in range(len(emotions)):
+        if result[ei] is None:
+            result[ei] = remaining.pop(0) if remaining else ei % n
+    return result  # type: ignore[return-value]
+
+
+def _apply_emotion_pose_overrides(row: dict, emotion_text: str) -> None:
+    """특정 감정 키워드에 맞게 facial_expression / action / body_pose 보정."""
+    emo = emotion_text.strip().lower()
+    for keyword, overrides in _EMOTION_POSE_OVERRIDES.items():
+        if keyword in emo:
+            row.update(overrides)
+            break
+
+
 def build_custom_templates(job_dir: Path, emotions: list[str]) -> Path:
+    """감정 텍스트를 의미에 맞는 템플릿 포즈에 매칭해 custom_templates.json 생성."""
     base = FACTORY_ROOT / "data" / "big_emoticon_templates.json"
-    rows = json.loads(base.read_text(encoding="utf-8"))
-    for i, row in enumerate(rows):
-        if i < len(emotions) and str(emotions[i]).strip():
-            row["text"] = str(emotions[i]).strip()
+    templates = json.loads(base.read_text(encoding="utf-8"))
+
+    n = min(len(emotions), 16)
+    matching = _match_emotions_to_templates(emotions[:n])
+
+    rows = []
+    for pos_idx in range(n):
+        tmpl = dict(templates[matching[pos_idx]])
+        tmpl["id"] = str(pos_idx + 1).zfill(2)          # 순서 고정 ID
+        tmpl["text"] = str(emotions[pos_idx]).strip()    # 사용자 감정 텍스트
+        _apply_emotion_pose_overrides(tmpl, tmpl["text"])  # 필요 시 표정 보정
+        rows.append(tmpl)
+
     out = job_dir / "custom_templates.json"
     out.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return out

@@ -10,13 +10,13 @@ _ILLUSTRATION_TEXTURE_FULL = (
     "subtle hand-drawn imperfections, "
     "organic line variation, "
     "slightly uneven brush edges, "
-    "natural fur flow, "
+    "natural texture flow, "
     "storybook illustration feel, "
     "warm emotional lighting, "
     "soft shading, "
     "gentle painterly rendering, "
     "non-generic handmade feeling, "
-    "premium pet illustration quality, "
+    "premium sticker illustration quality, "
     "avoid flat corporate mascot style, "
     "avoid overly clean vector symmetry, "
     "avoid emoji-like simplification"
@@ -105,9 +105,9 @@ def sheet_illustration_reference_prompt_fragment(style_intensity: float) -> str:
     t = clamp_style_intensity(style_intensity)
     base = (
         "professional illustrated character reference sheet, "
-        "storybook pet mascot sheet, "
+        "storybook character sheet, "
         "same exact character identity, "
-        "same fur pattern, same eyes, same face mask, same rendering style, "
+        "same texture pattern, same eyes, same face markings, same rendering style, "
         "not flat vector art, not corporate mascot style, "
         "white clean background, no text, no watermark"
     )
@@ -119,7 +119,7 @@ def sheet_illustration_reference_prompt_fragment(style_intensity: float) -> str:
         return f"{base}; soft watercolor illustration, gentle painterly shading"
     return (
         f"{base}; soft watercolor illustration, high detail emotional mascot, "
-        "subtle hand-drawn imperfections, organic line variation, premium pet illustration"
+        "subtle hand-drawn imperfections, organic line variation, premium sticker illustration"
     )
 
 
@@ -137,7 +137,7 @@ def candidate_prompt_style_fragment(style_intensity: float) -> str:
             "soft shading, gentle brush edges, warm pastel palette, handmade sticker feel. "
         )
     return (
-        f"[Candidate style {label}] Storybook premium pet illustration: "
-        "watercolor softness, organic fur flow, emotional lighting, "
+        f"[Candidate style {label}] Storybook premium illustration: "
+        "watercolor softness, organic texture flow, emotional lighting, "
         "avoid stock mascot / Midjourney generic look. "
     )

@@ -2036,7 +2036,11 @@ def main(argv: list[str] | None = None) -> int:
         planner = ConceptPlanner(
             templates_path=Path(ct_path) if ct_path and Path(ct_path).is_file() else None
         )
-        items = planner.plan(theme=theme, series_name=series_name)
+        items = planner.plan(
+            theme=theme,
+            series_name=series_name,
+            entity_type=getattr(identity_profile, "entity_type", "") or "",
+        )
         items_by_id: dict[str, dict[str, object]] = {
             str(it["id"]).strip().zfill(2): it for it in items
         }
