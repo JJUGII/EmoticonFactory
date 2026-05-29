@@ -47,6 +47,20 @@ def _get_redirect_uri() -> str:
 
 # ── OAuth2 헬퍼 ──────────────────────────────────────────────────────────────
 
+def get_bot_invite_url() -> str:
+    """봇만 초대하는 URL (OAuth callback / redirect_uri 불필요)."""
+    client_id = os.environ.get("DISCORD_CLIENT_ID", "")
+    if not client_id:
+        raise RuntimeError("DISCORD_CLIENT_ID 환경변수가 없습니다.")
+    import urllib.parse
+    params = {
+        "client_id": client_id,
+        "permissions": "1073741832",
+        "scope": "bot",
+    }
+    return f"https://discord.com/api/oauth2/authorize?{urllib.parse.urlencode(params)}"
+
+
 def get_oauth2_url(state: str) -> str:
     """봇 초대 + OAuth2 URL 생성.
 

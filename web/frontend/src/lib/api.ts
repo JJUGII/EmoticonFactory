@@ -215,6 +215,35 @@ export async function getDiscordInviteUrl(jobId: string): Promise<{ oauth2_url: 
   return res.json();
 }
 
+export async function getDiscordBotInviteUrl(): Promise<{ bot_invite_url: string }> {
+  const res = await fetch(apiUrl("/api/export/discord/bot-invite"), {
+    ...ngrokRequestHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Discord 봇 초대 URL 생성 실패");
+  }
+  return res.json();
+}
+
+export async function uploadToDiscord(
+  jobId: string,
+  guildId: string
+): Promise<{ uploaded_count: number; stickers: { id: string; name: string }[] }> {
+  const res = await fetch(
+    apiUrl(`/api/export/discord/upload/${jobId}?guild_id=${encodeURIComponent(guildId)}`),
+    {
+      method: "POST",
+      headers: ngrokRequestHeaders(),
+    }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Discord 업로드 실패");
+  }
+  return res.json();
+}
+
 export function pollJob(
   jobId: string,
   onUpdate: (s: JobStatus) => void,

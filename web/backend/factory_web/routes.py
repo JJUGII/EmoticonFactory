@@ -349,9 +349,20 @@ def export_signal(job_id: str) -> dict:
     return {"platform": "signal", "link": link, "cached": False}
 
 
+@router.get("/export/discord/bot-invite")
+def discord_bot_invite() -> dict:
+    """Discord 봇 초대 URL (OAuth callback 없음). 서버 ID 직접 입력 방식용."""
+    try:
+        from factory_web.services.exporters.discord_exporter import get_bot_invite_url
+        url = get_bot_invite_url()
+        return {"bot_invite_url": url}
+    except RuntimeError as e:
+        raise HTTPException(500, detail=str(e)) from e
+
+
 @router.get("/export/discord/invite/{job_id}")
 def discord_invite_url(job_id: str) -> dict:
-    """Discord 봇 초대 URL 발급."""
+    """Discord 봇 초대 URL 발급 (OAuth flow, 레거시)."""
     try:
         store.load(job_id)
     except FileNotFoundError as exc:
