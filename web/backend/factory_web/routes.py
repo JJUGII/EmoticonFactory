@@ -31,16 +31,27 @@ pipeline = PipelineService(store)
 
 
 def _job_status(doc: dict) -> JobStatusResponse:
-    cuts = [
-        CutProgressItem(
-            id=str(c.get("id", "")).zfill(2),
+    job_id = str(doc["job_id"])
+    pkg_dir = doc.get("package_dir")
+    cuts = []
+    for c in doc.get("cuts") or []:
+        cid = str(c.get("id", "")).zfill(2)
+        status = c.get("status", "pending")
+        url: str | None = None
+        if status == "done" and pkg_dir:
+            for subdir in ("png_no_text", "png"):
+                p = Path(pkg_dir) / subdir / f"{cid}.png"
+                if p.is_file():
+                    url = f"/api/files/{job_id}/package/{subdir}/{cid}.png"
+                    break
+        cuts.append(CutProgressItem(
+            id=cid,
             text=str(c.get("text", "")),
-            status=c.get("status", "pending"),
-        )
-        for c in doc.get("cuts") or []
-    ]
+            status=status,
+            url=url,
+        ))
     return JobStatusResponse(
-        job_id=str(doc["job_id"]),
+        job_id=job_id,
         phase=doc.get("phase", "created"),
         progress=int(doc.get("progress") or 0),
         message=str(doc.get("message") or ""),

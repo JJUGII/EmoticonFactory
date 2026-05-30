@@ -24,7 +24,7 @@ export interface JobStatus {
   progress: number;
   message: string;
   current_cut?: string | null;
-  cuts: { id: string; text: string; status: CutStatus }[];
+  cuts: { id: string; text: string; status: CutStatus; url?: string | null }[];
   error?: string | null;
 }
 

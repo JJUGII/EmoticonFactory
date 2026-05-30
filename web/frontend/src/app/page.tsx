@@ -244,13 +244,17 @@ export default function HomePage() {
             <StepEmotions emotions={emotions} onChange={setEmotions} />
           </motion.div>
         )}
-        {step === 4 && jobStatus && (
+        {step === 4 && (
           <motion.div key="s4" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
             <StepGenerate
-              message={jobStatus.message}
-              progress={jobStatus.progress}
-              cuts={jobStatus.cuts}
-              currentCut={jobStatus.current_cut}
+              message={jobStatus?.message ?? "이모티콘 생성 준비 중..."}
+              progress={jobStatus?.progress ?? 0}
+              cuts={jobStatus?.cuts ?? emotions.map((t, i) => ({
+                id: String(i + 1).padStart(2, "0"),
+                text: t,
+                status: "pending" as const,
+              }))}
+              currentCut={jobStatus?.current_cut}
             />
           </motion.div>
         )}
