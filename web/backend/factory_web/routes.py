@@ -552,6 +552,20 @@ def subscribe_push(job_id: str, body: dict) -> dict:
     return {"ok": True}
 
 
+@router.post("/sms/register/{job_id}")
+def register_sms(job_id: str, body: dict) -> dict:
+    """SMS 수신 전화번호를 job에 저장."""
+    try:
+        store.load(job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+    phone = (body.get("phone") or "").strip()
+    if not phone:
+        raise HTTPException(400, detail="phone 필드 필요")
+    store.update(job_id, sms_phone=phone)
+    return {"ok": True}
+
+
 @router.get("/files/{job_id}/{file_path:path}")
 def serve_file(job_id: str, file_path: str) -> FileResponse:
     job_base = store.job_dir(job_id).resolve()

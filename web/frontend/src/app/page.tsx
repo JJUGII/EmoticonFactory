@@ -27,6 +27,7 @@ import {
   revokePreviewObjectUrl,
 } from "@/lib/imageFile";
 import { requestPushForJob } from "@/lib/pushNotification";
+import { registerSmsPhone } from "@/lib/smsNotification";
 
 type Step = 1 | 2 | 3 | 4 | 5;
 
@@ -42,6 +43,7 @@ export default function HomePage() {
   const [candidates, setCandidates] = useState<CandidateItem[]>([]);
   const [selectedCandidate, setSelectedCandidate] = useState<number | null>(null);
   const [emotions, setEmotions] = useState<string[]>([]);
+  const [phone, setPhone] = useState("");
   const [resultCuts, setResultCuts] = useState<
     { id: string; text: string; url?: string | null }[]
   >([]);
@@ -136,6 +138,7 @@ export default function HomePage() {
     setSelectedCandidate(null);
     setJobStatus(null);
     setResultCuts([]);
+    setPhone("");
     fetchDefaultEmotions().then(setEmotions);
     // URL에서 job 파라미터 제거
     const url = new URL(window.location.href);
@@ -216,6 +219,10 @@ export default function HomePage() {
     setLoading(true);
     // Web Push 구독 시도 (백그라운드 — 실패해도 생성은 계속)
     requestPushForJob(jobId).catch(() => {});
+    // SMS 전화번호 등록 (입력한 경우)
+    if (phone.trim()) {
+      registerSmsPhone(jobId, phone.trim()).catch(() => {});
+    }
     try {
       // 선택한 후보 번호로 스타일 자동 결정: 1,2=일러스트 / 3,4=실사풍 (파이프라인 1-based)
       const inferredStyle = (selectedCandidate ?? 0) >= 3 ? "realistic" : "illustration";
@@ -313,7 +320,12 @@ export default function HomePage() {
         )}
         {step === 3 && (
           <motion.div key="s3" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
-            <StepEmotions emotions={emotions} onChange={setEmotions} />
+            <StepEmotions
+              emotions={emotions}
+              onChange={setEmotions}
+              phone={phone}
+              onPhoneChange={setPhone}
+            />
           </motion.div>
         )}
         {step === 4 && (

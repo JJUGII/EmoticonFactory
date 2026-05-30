@@ -559,10 +559,12 @@ class PipelineService:
                     else _format_pipeline_error(res.returncode, logs),
                     log_tail="".join(logs)[-12000:],
                 )
-                # Web Push 알림 발송
+                # Web Push + SMS 알림 발송
                 if res.returncode == 0:
+                    job_after = self.store.load(job_id)
+
+                    # Web Push
                     try:
-                        job_after = self.store.load(job_id)
                         push_sub = job_after.get("push_subscription")
                         if push_sub:
                             from factory_web.services.push_notifier import send as push_send
@@ -574,6 +576,21 @@ class PipelineService:
                             )
                     except Exception as pe:
                         print(f"[push] 알림 발송 중 예외: {pe}")
+
+                    # SMS
+                    try:
+                        phone = job_after.get("sms_phone")
+                        if phone:
+                            from factory_web.services.sms_notifier import send as sms_send
+                            sms_send(
+                                to=phone,
+                                text=(
+                                    "[이모티콘 스튜디오] 이모티콘 16장 생성 완료! "
+                                    f"확인 → https://emoticonfactory.vercel.app/?job={job_id}"
+                                ),
+                            )
+                    except Exception as se:
+                        print(f"[sms] 알림 발송 중 예외: {se}")
             except Exception as exc:
                 self.store.update(
                     job_id,

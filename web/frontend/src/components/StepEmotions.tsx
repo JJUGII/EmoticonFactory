@@ -10,9 +10,11 @@ const RANDOM_POOL = [
 type Props = {
   emotions: string[];
   onChange: (next: string[]) => void;
+  phone: string;
+  onPhoneChange: (v: string) => void;
 };
 
-export function StepEmotions({ emotions, onChange }: Props) {
+export function StepEmotions({ emotions, onChange, phone, onPhoneChange }: Props) {
   const setAt = (i: number, v: string) => {
     const next = [...emotions];
     next[i] = v;
@@ -56,6 +58,31 @@ export function StepEmotions({ emotions, onChange }: Props) {
           초기화
         </button>
       </div>
+
+      {/* SMS 알림 (선택) */}
+      <motion.div
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1 }}
+        className="rounded-2xl bg-white/80 p-4 shadow-card"
+      >
+        <label className="block">
+          <span className="flex items-center gap-1.5 text-sm font-medium text-kakao-brown">
+            📱 완료 SMS 알림 <span className="text-xs font-normal text-kakao-brown/50">(선택)</span>
+          </span>
+          <input
+            type="tel"
+            inputMode="numeric"
+            placeholder="010-0000-0000"
+            value={phone}
+            onChange={(e) => onPhoneChange(e.target.value)}
+            className="mt-2 w-full rounded-xl border border-kakao-brown/10 bg-kakao-cream/50 px-3 py-2.5 text-sm outline-none focus:border-kakao-yellow"
+          />
+          <p className="mt-1.5 text-xs text-kakao-brown/40">
+            생성이 완료되면 문자로 알려드려요
+          </p>
+        </label>
+      </motion.div>
 
       <motion.div
         className="grid grid-cols-2 gap-3 sm:grid-cols-4"
