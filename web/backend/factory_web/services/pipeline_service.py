@@ -559,6 +559,21 @@ class PipelineService:
                     else _format_pipeline_error(res.returncode, logs),
                     log_tail="".join(logs)[-12000:],
                 )
+                # Web Push 알림 발송
+                if res.returncode == 0:
+                    try:
+                        job_after = self.store.load(job_id)
+                        push_sub = job_after.get("push_subscription")
+                        if push_sub:
+                            from factory_web.services.push_notifier import send as push_send
+                            push_send(
+                                subscription=push_sub,
+                                title="🎉 이모티콘 완성!",
+                                body="16장이 모두 준비됐어요. 지금 확인해보세요!",
+                                url=f"/?job={job_id}",
+                            )
+                    except Exception as pe:
+                        print(f"[push] 알림 발송 중 예외: {pe}")
             except Exception as exc:
                 self.store.update(
                     job_id,

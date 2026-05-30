@@ -532,6 +532,25 @@ def slack_upload(job_id: str, token: str) -> dict:
     return {"platform": "slack", **result}
 
 
+@router.get("/push/vapid-public-key")
+def get_vapid_public_key() -> dict:
+    """프론트에서 Web Push 구독 시 필요한 VAPID 공개키 반환."""
+    import os
+    key = os.environ.get("VAPID_PUBLIC_KEY", "")
+    return {"vapid_public_key": key}
+
+
+@router.post("/push/subscribe/{job_id}")
+def subscribe_push(job_id: str, body: dict) -> dict:
+    """Web Push 구독 정보를 job에 저장."""
+    try:
+        store.load(job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+    store.update(job_id, push_subscription=body.get("subscription"))
+    return {"ok": True}
+
+
 @router.get("/files/{job_id}/{file_path:path}")
 def serve_file(job_id: str, file_path: str) -> FileResponse:
     job_base = store.job_dir(job_id).resolve()

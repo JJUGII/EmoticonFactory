@@ -26,6 +26,7 @@ import {
   logFileMeta,
   revokePreviewObjectUrl,
 } from "@/lib/imageFile";
+import { requestPushForJob } from "@/lib/pushNotification";
 
 type Step = 1 | 2 | 3 | 4 | 5;
 
@@ -213,6 +214,8 @@ export default function HomePage() {
     if (!jobId) return;
     setStep(4);
     setLoading(true);
+    // Web Push 구독 시도 (백그라운드 — 실패해도 생성은 계속)
+    requestPushForJob(jobId).catch(() => {});
     try {
       // 선택한 후보 번호로 스타일 자동 결정: 1,2=일러스트 / 3,4=실사풍 (파이프라인 1-based)
       const inferredStyle = (selectedCandidate ?? 0) >= 3 ? "realistic" : "illustration";
