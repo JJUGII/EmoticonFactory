@@ -41,7 +41,7 @@ export function StepCandidates({
           animate="visible"
           variants={gridVariants}
         >
-          {[0, 1].map((i) => (
+          {[0, 1, 2, 3].map((i) => (
             <motion.div
               key={i}
               variants={cardVariants}
@@ -62,7 +62,7 @@ export function StepCandidates({
       >
         <h2 className="text-xl font-bold">캐릭터 후보를 만들어 볼까요?</h2>
         <p className="text-sm text-kakao-brown/70">
-          아래 버튼을 눌러 일러스트·실사 후보 2장을 생성해 주세요.
+          아래 버튼을 눌러 일러스트·실사 후보 4장을 생성해 주세요.
         </p>
       </motion.div>
     );
@@ -86,9 +86,12 @@ export function StepCandidates({
       >
         {candidates.map((c) => {
           const active = selected === c.index;
-          const styleLabel = c.index === 0
-            ? { emoji: "🎨", name: "일러스트", sub: "치비·수채화" }
-            : { emoji: "📸", name: "실사풍", sub: "CG·디지털 아트" };
+          // 0,1 = 일러스트 A/B / 2,3 = 실사풍 A/B
+          const isIllus = c.index < 2;
+          const variant = isIllus ? (c.index === 0 ? "A" : "B") : (c.index === 2 ? "A" : "B");
+          const styleLabel = isIllus
+            ? { emoji: "🎨", name: `일러스트 ${variant}`, sub: "치비·수채화" }
+            : { emoji: "📸", name: `실사풍 ${variant}`, sub: "CG·디지털 아트" };
           return (
             <motion.button
               key={c.index}
