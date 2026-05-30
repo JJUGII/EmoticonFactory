@@ -244,6 +244,21 @@ export async function uploadToDiscord(
   return res.json();
 }
 
+export async function uploadToSlack(
+  jobId: string,
+  token: string
+): Promise<{ uploaded_count: number; failed_count: number; workspace: string }> {
+  const res = await fetch(
+    apiUrl(`/api/export/slack/${jobId}?token=${encodeURIComponent(token)}`),
+    { method: "POST", headers: ngrokRequestHeaders() }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Slack 업로드 실패");
+  }
+  return res.json();
+}
+
 export function pollJob(
   jobId: string,
   onUpdate: (s: JobStatus) => void,

@@ -444,6 +444,36 @@ def discord_upload(job_id: str, guild_id: str) -> dict:
     return {"platform": "discord", **result}
 
 
+# ── Slack ────────────────────────────────────────────────────────────────────
+
+@router.post("/export/slack/{job_id}")
+def slack_upload(job_id: str, token: str) -> dict:
+    """Slack 커스텀 이모지 업로드. token = xoxp-... (User OAuth Token)."""
+    try:
+        doc = store.load(job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+
+    if doc.get("phase") != "completed":
+        raise HTTPException(400, detail=f"이모티콘 생성이 완료되지 않았습니다. (phase={doc.get('phase')})")
+
+    pkg_s = doc.get("package_dir")
+    if not pkg_s:
+        raise HTTPException(400, detail="패키지 경로가 없습니다.")
+
+    emotions: list[str] = doc.get("emotions") or []
+    series_name: str = doc.get("series_name") or "MySticker"
+
+    try:
+        from factory_web.services.exporters.slack_exporter import export_for_job
+        result = export_for_job(job_id, token, pkg_s, emotions, series_name)
+    except RuntimeError as e:
+        raise HTTPException(500, detail=str(e)) from e
+
+    store.update(job_id, slack_uploaded=result["uploaded_count"], slack_workspace=result["workspace"])
+    return {"platform": "slack", **result}
+
+
 @router.get("/files/{job_id}/{file_path:path}")
 def serve_file(job_id: str, file_path: str) -> FileResponse:
     job_base = store.job_dir(job_id).resolve()
