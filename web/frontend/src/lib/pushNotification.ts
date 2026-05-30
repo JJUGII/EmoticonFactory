@@ -5,7 +5,13 @@
  *   const ok = await requestPushForJob(jobId);
  */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+import { getApiBase } from "./apiBase";
+
+function apiUrl(path: string): string {
+  const base = getApiBase();
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return base ? `${base}${p}` : p;
+}
 
 // Base64URL → Uint8Array (VAPID public key 변환용)
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
@@ -16,7 +22,7 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 }
 
 async function getVapidPublicKey(): Promise<string> {
-  const res = await fetch(`${API_BASE}/api/push/vapid-public-key`);
+  const res = await fetch(apiUrl("/api/push/vapid-public-key"));
   if (!res.ok) throw new Error("VAPID key 요청 실패");
   const data = await res.json();
   return data.public_key as string;
@@ -43,7 +49,7 @@ async function sendSubscriptionToServer(
   jobId: string,
   subscription: PushSubscription
 ): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/push/subscribe/${jobId}`, {
+  const res = await fetch(apiUrl(`/api/push/subscribe/${jobId}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(subscription.toJSON()),
