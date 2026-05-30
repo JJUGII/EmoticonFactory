@@ -127,9 +127,10 @@ _EMOTION_POSE_OVERRIDES: dict[str, dict[str, str]] = {
     "응원해": {
         "emotion": "응원/열정",
         "facial_expression": "활짝 웃으며 힘차게 응원하는 밝은 표정",
-        "action": "두 손 주먹 쥐고 힘차게 들어올리는 응원 동작",
-        "body_pose": "두 팔을 위로 힘차게 든 응원 포즈, 정면 바라봄",
-        "motion_hint": "팔이 한 번 크게 위로 올라갔다 내려옴",
+        "action": "두 주먹을 좌우 완전 대칭으로 위로 힘차게 든 응원 동작",
+        "body_pose": "캐릭터가 화면 정중앙에 위치, 좌우 대칭 포즈, 두 팔 동시에 위로 든 자세 — 한쪽으로 치우치지 않음",
+        "motion_hint": "두 팔이 동시에 위로 한 번 올라갔다 내려옴",
+        "prop": "none",
     },
     "축하해": {
         "emotion": "축하/기쁨",
@@ -138,6 +139,22 @@ _EMOTION_POSE_OVERRIDES: dict[str, dict[str, str]] = {
         "body_pose": "두 팔 위로 들어올린 만세 자세, 전신 들뜬 기운",
         "motion_hint": "배경에서 하트·폭죽·별 같은 반짝임이 터짐",
         "prop": "heart_shower",
+    },
+    "보고싶어": {
+        "emotion": "그리움",
+        "facial_expression": "눈을 살짝 촉촉하게 빛내며 먼 곳을 바라보는 그리운 표정, 입꼬리가 살짝 내려감",
+        "action": "두 손을 가슴 앞에 모으고 먼 곳을 바라보는 그리움의 포즈",
+        "body_pose": "캐릭터 상반신이 화면 정중앙에 위치, 박스·울타리·테이블 등 소품 일체 없음, 단순 배경",
+        "motion_hint": "눈에 살짝 눈물이 맺히는 효과",
+        "prop": "none",
+    },
+    "안아줘": {
+        "emotion": "안아줘/애교",
+        "facial_expression": "눈을 살짝 감고 입을 살짝 삐죽이는 애교 표정, 볼이 부풀어",
+        "action": "두 팔을 가슴 높이에서 좌우 대칭으로 앞으로 살짝 뻗어 안아달라는 제스처",
+        "body_pose": "캐릭터가 화면 정중앙에 위치, 두 팔이 좌우 완전 대칭으로 앞으로 뻗은 자세 — 한쪽으로 치우치지 않음",
+        "motion_hint": "팔이 살짝 앞뒤로 흔들리는 동작",
+        "prop": "none",
     },
     "잘자": {
         "emotion": "평온/수면",

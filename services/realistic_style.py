@@ -10,36 +10,35 @@ from __future__ import annotations
 # ── 후보 생성용 핵심 프롬프트 ────────────────────────────────────────────
 
 REALISTIC_CANDIDATE_CORE_KO = (
-    "첨부된 이미지를 기반으로 고품질 실사풍 디지털 아트 이모티콘 캐릭터로 변환해줘. "
-    "사진처럼 자연스러운 털 질감 또는 피부톤, 섬세한 빛과 그림자, 깊이감 있는 눈 표현을 살려줘. "
-    "단순한 만화·플랫 벡터 스타일이 아닌, 고품질 CG 렌더링 또는 디지털 페인팅 수준의 사실적인 질감을 적용해줘. "
-    "털 한 올 한 올의 질감, 피부의 미묘한 톤 변화, 눈의 반사광과 홍채 디테일까지 섬세하게 표현해줘. "
-    "이모티콘 크기에서도 감정이 잘 전달되도록 얼굴 클로즈업 위주로 구성해줘. "
-    "입력 이미지의 대상(사람이면 사람, 고양이면 고양이)을 그대로 유지해줘. "
+    "첨부된 사진 속 인물/동물을 실사에 최대한 가깝게 캐릭터화해줘. "
+    "사진 속 얼굴 생김새(눈 모양, 눈썹, 코, 입술, 헤어스타일, 헤어 색상, 피부톤)를 그대로 유지하는 것이 최우선이야. "
+    "예쁘게 미화하거나 이상화하지 말고, 실제 사진 속 인물과 닮아 보이는 것이 핵심이야. "
+    "자연스러운 피부 질감, 머리카락 결, 눈의 홍채와 반사광을 살려줘. "
+    "만화·플랫 벡터·과도한 미형화 금지. 실제 사진에서 보이는 특징을 그대로 캐릭터화해줘. "
     "배경은 흰색 또는 투명. 글자, 로고, 워터마크 없음. 중앙에 한 대상만. 1024×1024."
 )
 
 REALISTIC_CANDIDATE_CORE_EN = (
-    "Convert the attached image into a high-quality photo-realistic digital art emoticon character. "
-    "Apply realistic fur or skin texture as if photographed, with detailed lighting, shadow, and depth. "
-    "NOT a cartoon or flat vector style — aim for CG rendering or digital painting level realism. "
-    "Render individual strands of fur or subtle skin tone variations, iris detail, and specular highlights in eyes. "
-    "Keep the same subject as the input (person stays person, cat stays cat). "
+    "Convert the attached photo into a realistic-style character that closely resembles the actual person/animal in the photo. "
+    "The top priority is preserving the actual face features: eye shape, nose, lips, hairstyle, hair color, and skin tone — exactly as they appear in the photo. "
+    "Do NOT idealize or beautify beyond what is shown. It must look like the same person/animal. "
+    "Apply natural skin texture, hair strand detail, iris and specular highlights in eyes. "
+    "No cartoon, flat vector, or over-stylized look. Faithful photo-to-character conversion. "
     "White or transparent background. No text, logos, or watermarks. One centered subject. 1024×1024."
 )
 
 REALISTIC_CANDIDATE_GUARD_KO = (
     "절대 다른 사람/동물로 바꾸지 마. "
-    "고품질 CG 렌더링 또는 디지털 페인팅 수준의 실사풍 질감이어야 해. "
+    "실제 사진 속 인물과 닮아 보여야 해 — 미화나 이상화 금지. "
     "만화·웹툰·플랫 스타일로 단순화하지 마. "
     "이모티콘으로 사용 가능한 가독성 수준을 유지해."
 )
 
-# 후보별 스타일 힌트 (실사풍 계열 — 후보 1개 기본)
+# 후보별 스타일 힌트 (실사풍 계열)
 REALISTIC_CANDIDATE_STYLE_HINTS: dict[int, str] = {
-    1: "고품질 CG 렌더링 또는 디지털 페인팅 수준의 사실적 질감, 자연광 조명, 섬세한 털/피부 디테일",
-    2: "사진처럼 자연스러운 실사풍, 눈의 반사광과 홍채 디테일 강조, 부드러운 배경 처리",
-    3: "시네마틱 라이팅의 고품질 실사 디지털 아트, 캐릭터 특징을 극대화한 클로즈업",
+    1: "실제 사진과 최대한 닮게, 자연광 조명, 자연스러운 피부·머리카락 질감",
+    2: "사진 속 인물의 특징을 충실히 재현, 눈의 홍채·반사광 디테일 강조",
+    3: "부드러운 자연광 조명의 실사풍, 피부 톤과 헤어 색상을 사진 그대로 유지",
 }
 
 # ── 감정 컷 생성용 스타일 베이스 ─────────────────────────────────────────
