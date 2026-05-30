@@ -13,20 +13,6 @@ function apiUrl(path: string): string {
   return base ? `${base}${p}` : p;
 }
 
-// Base64URL → Uint8Array<ArrayBuffer> (VAPID public key 변환용)
-// Uint8Array.from() 은 ArrayBufferLike를 반환해 TypeScript 타입 오류 발생.
-// new Uint8Array(n) 으로 생성하면 ArrayBuffer가 보장됨.
-function urlBase64ToUint8Array(base64String: string): Uint8Array {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const raw = atob(base64);
-  const arr = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) {
-    arr[i] = raw.charCodeAt(i);
-  }
-  return arr;
-}
-
 async function getVapidPublicKey(): Promise<string> {
   const res = await fetch(apiUrl("/api/push/vapid-public-key"));
   if (!res.ok) throw new Error("VAPID key 요청 실패");
@@ -45,9 +31,11 @@ async function subscribePush(
 ): Promise<PushSubscription> {
   const existing = await reg.pushManager.getSubscription();
   if (existing) return existing;
+  // applicationServerKey 는 string(base64url) 도 허용 — Uint8Array 변환 불필요
+  // (Uint8Array<ArrayBufferLike> 타입이 TypeScript 5.7+ 빌드 오류를 일으킴)
   return reg.pushManager.subscribe({
     userVisibleOnly: true,
-    applicationServerKey: urlBase64ToUint8Array(vapidKey),
+    applicationServerKey: vapidKey,
   });
 }
 
