@@ -52,13 +52,78 @@ export default function HomePage() {
     previewBlobRef.current = null;
   }, []);
 
+  // ── URL 세션 복원 ─────────────────────────────────────────────────────
+  const restoreSession = useCallback(async (id: string) => {
+    try {
+      const s = await fetchJob(id);
+      setJobId(id);
+      setJobStatus(s);
+      if (s.phase === "completed") {
+        const result = await fetchResult(id);
+        setResultCuts(result.cuts);
+        setStep(5);
+      } else if (s.phase === "emoticons_running") {
+        setStep(4);
+        setLoading(true);
+        stopPollRef.current?.();
+        stopPollRef.current = pollJob(id, async (st) => {
+          setJobStatus(st);
+          if (st.phase === "completed") {
+            const result = await fetchResult(id);
+            setResultCuts(result.cuts);
+            setStep(5);
+            setLoading(false);
+          }
+          if (st.phase === "failed") setLoading(false);
+        }, 2000, ["completed", "failed"]);
+      } else if (s.phase === "canonical_selected") {
+        setStep(3);
+      } else if (s.phase === "candidates_ready") {
+        const list = await fetchCandidates(id);
+        setCandidates(list);
+        setStep(2);
+      } else if (s.phase === "candidates_running") {
+        setStep(2);
+        setLoading(true);
+        stopPollRef.current?.();
+        stopPollRef.current = pollJob(id, async (st) => {
+          setJobStatus(st);
+          if (st.phase === "candidates_ready") {
+            const list = await fetchCandidates(id);
+            setCandidates(list);
+            setLoading(false);
+          }
+          if (st.phase === "failed") setLoading(false);
+        }, 2000, ["candidates_ready", "failed"]);
+      }
+    } catch {
+      // 복원 실패 시 그냥 step 1 유지
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
+    // URL에서 job ID 복원
+    const params = new URLSearchParams(window.location.search);
+    const savedJobId = params.get("job");
+    if (savedJobId) {
+      restoreSession(savedJobId);
+    }
     fetchDefaultEmotions().then(setEmotions);
     return () => {
       stopPollRef.current?.();
       clearPreviewBlob();
     };
-  }, [clearPreviewBlob]);
+  }, [clearPreviewBlob, restoreSession]);
+
+  // jobId 변경 시 URL 업데이트
+  useEffect(() => {
+    if (jobId) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("job", jobId);
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, [jobId]);
 
   const resetAll = useCallback(() => {
     setStep(1);
@@ -71,6 +136,10 @@ export default function HomePage() {
     setJobStatus(null);
     setResultCuts([]);
     fetchDefaultEmotions().then(setEmotions);
+    // URL에서 job 파라미터 제거
+    const url = new URL(window.location.href);
+    url.searchParams.delete("job");
+    window.history.replaceState({}, "", url.toString());
   }, [clearPreviewBlob]);
 
   const onUpload = async (file: File) => {
