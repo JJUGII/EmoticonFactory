@@ -35,7 +35,6 @@ export default function HomePage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [generator] = useState("openai");
-  const [artStyle, setArtStyle] = useState<"illustration" | "realistic">("illustration");
   const [speciesHint, setSpeciesHint] = useState("");
   const [loading, setLoading] = useState(false);
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
@@ -102,7 +101,8 @@ export default function HomePage() {
     setLoading(true);
     setCandidates([]);
     try {
-      await generateCandidates(jobId, generator, speciesHint, artStyle);
+      // artStyle은 후보 선택 후 결정되므로 candidates 요청 시엔 무관 (백엔드가 양쪽 다 생성)
+      await generateCandidates(jobId, generator, speciesHint, "illustration");
       stopPollRef.current?.();
       stopPollRef.current = pollJob(
         jobId,
@@ -145,7 +145,9 @@ export default function HomePage() {
     setStep(4);
     setLoading(true);
     try {
-      const initial = await generateEmoticons(jobId, emotions, generator, true, artStyle);
+      // 선택한 후보 번호로 스타일 자동 결정: candidate_00=일러스트, candidate_01=실사
+      const inferredStyle = selectedCandidate === 1 ? "realistic" : "illustration";
+      const initial = await generateEmoticons(jobId, emotions, generator, true, inferredStyle);
       setJobStatus(initial);
       stopPollRef.current?.();
       stopPollRef.current = pollJob(
@@ -221,8 +223,6 @@ export default function HomePage() {
               uploading={loading}
               onFile={onUpload}
               onFileError={setUploadError}
-              artStyle={artStyle}
-              onArtStyleChange={setArtStyle}
               speciesHint={speciesHint}
               onSpeciesHintChange={setSpeciesHint}
             />

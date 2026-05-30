@@ -15,16 +15,12 @@ const SPECIES_OPTIONS = [
   { value: "bird",    label: "새",      emoji: "🐦" },
 ];
 
-type ArtStyle = "illustration" | "realistic";
-
 type Props = {
   previewUrl: string | null;
   uploadError: string | null;
   uploading?: boolean;
   onFile: (file: File) => void;
   onFileError: (message: string) => void;
-  artStyle?: ArtStyle;
-  onArtStyleChange?: (v: ArtStyle) => void;
   speciesHint?: string;
   onSpeciesHintChange?: (v: string) => void;
 };
@@ -35,8 +31,6 @@ export function StepUpload({
   uploading = false,
   onFile,
   onFileError,
-  artStyle = "illustration",
-  onArtStyleChange,
   speciesHint = "",
   onSpeciesHintChange,
 }: Props) {
@@ -161,42 +155,6 @@ export function StepUpload({
                 <span className="mt-0.5">{opt.label}</span>
               </button>
             ))}
-          </div>
-        </div>
-
-        {/* 스타일 선택 */}
-        <div>
-          <label className="text-sm font-medium text-kakao-brown">이모티콘 스타일</label>
-          <p className="mb-2 text-xs text-kakao-brown/60">
-            생성할 이모티콘의 그림 스타일을 선택해요
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => onArtStyleChange?.("illustration")}
-              className={`flex flex-col items-center rounded-xl border py-3 text-xs transition ${
-                artStyle === "illustration"
-                  ? "border-kakao-yellow bg-kakao-yellow/30 font-bold text-kakao-brown"
-                  : "border-kakao-brown/10 bg-white text-kakao-brown/70 hover:bg-kakao-yellow/10"
-              }`}
-            >
-              <span className="text-2xl mb-1">🎨</span>
-              <span className="font-medium">일러스트</span>
-              <span className="mt-0.5 text-kakao-brown/50">치비·수채화·카툰</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => onArtStyleChange?.("realistic")}
-              className={`flex flex-col items-center rounded-xl border py-3 text-xs transition ${
-                artStyle === "realistic"
-                  ? "border-kakao-yellow bg-kakao-yellow/30 font-bold text-kakao-brown"
-                  : "border-kakao-brown/10 bg-white text-kakao-brown/70 hover:bg-kakao-yellow/10"
-              }`}
-            >
-              <span className="text-2xl mb-1">📸</span>
-              <span className="font-medium">실사(웹툰)</span>
-              <span className="mt-0.5 text-kakao-brown/50">세미리얼·웹툰</span>
-            </button>
           </div>
         </div>
 

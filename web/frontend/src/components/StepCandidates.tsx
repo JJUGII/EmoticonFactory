@@ -36,12 +36,12 @@ export function StepCandidates({
         <h2 className="text-center text-xl font-bold">귀여운 캐릭터 만드는 중...</h2>
         <p className="text-center text-sm text-kakao-brown/70">{message}</p>
         <motion.div
-          className="grid grid-cols-1 gap-4 sm:grid-cols-3"
+          className="grid grid-cols-2 gap-4"
           initial="hidden"
           animate="visible"
           variants={gridVariants}
         >
-          {[1, 2, 3].map((i) => (
+          {[0, 1].map((i) => (
             <motion.div
               key={i}
               variants={cardVariants}
@@ -62,7 +62,7 @@ export function StepCandidates({
       >
         <h2 className="text-xl font-bold">캐릭터 후보를 만들어 볼까요?</h2>
         <p className="text-sm text-kakao-brown/70">
-          아래 버튼을 눌러 사진에서 후보 3장을 생성해 주세요.
+          아래 버튼을 눌러 일러스트·실사 후보 2장을 생성해 주세요.
         </p>
       </motion.div>
     );
@@ -79,13 +79,16 @@ export function StepCandidates({
         마음에 드는 캐릭터를 골라주세요
       </p>
       <motion.div
-        className="relative z-10 grid grid-cols-1 gap-4 sm:grid-cols-3"
+        className="relative z-10 grid grid-cols-2 gap-4"
         initial="visible"
         animate="visible"
         variants={gridVariants}
       >
         {candidates.map((c) => {
           const active = selected === c.index;
+          const styleLabel = c.index === 0
+            ? { emoji: "🎨", name: "일러스트", sub: "치비·수채화" }
+            : { emoji: "📸", name: "실사풍", sub: "CG·디지털 아트" };
           return (
             <motion.button
               key={c.index}
@@ -101,7 +104,7 @@ export function StepCandidates({
             >
               <img
                 src={c.url}
-                alt={`후보 ${c.index}`}
+                alt={styleLabel.name}
                 className="relative z-10 aspect-square w-full bg-white object-cover"
                 loading="lazy"
                 onError={(e) => {
@@ -115,9 +118,12 @@ export function StepCandidates({
                   ✓
                 </span>
               )}
-              <span className="relative z-10 block bg-white py-2 text-sm font-medium">
-                후보 {c.index}
-              </span>
+              <div className="relative z-10 bg-white py-2 text-center">
+                <span className="text-sm font-bold">
+                  {styleLabel.emoji} {styleLabel.name}
+                </span>
+                <span className="block text-xs text-kakao-brown/50">{styleLabel.sub}</span>
+              </div>
             </motion.button>
           );
         })}
