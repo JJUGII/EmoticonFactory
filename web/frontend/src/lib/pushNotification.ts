@@ -13,12 +13,18 @@ function apiUrl(path: string): string {
   return base ? `${base}${p}` : p;
 }
 
-// Base64URL → Uint8Array (VAPID public key 변환용)
+// Base64URL → Uint8Array<ArrayBuffer> (VAPID public key 변환용)
+// Uint8Array.from() 은 ArrayBufferLike를 반환해 TypeScript 타입 오류 발생.
+// new Uint8Array(n) 으로 생성하면 ArrayBuffer가 보장됨.
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
   const raw = atob(base64);
-  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) {
+    arr[i] = raw.charCodeAt(i);
+  }
+  return arr;
 }
 
 async function getVapidPublicKey(): Promise<string> {
