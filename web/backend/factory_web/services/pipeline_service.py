@@ -109,6 +109,17 @@ _EMOTION_TEMPLATE_PREFS: list[tuple[tuple[str, ...], tuple[int, ...]]] = [
 
 # 특정 감정에 대한 emotion 레이블 + 포즈/표정 보정 오버라이드
 _EMOTION_POSE_OVERRIDES: dict[str, dict[str, str]] = {
+    "사랑해": {
+        "emotion": "따뜻한 애정",
+        "facial_expression": (
+            "눈을 크게 활짝 뜨고 환하게 웃는 행복한 표정 — "
+            "눈동자가 하트 모양이거나 반짝반짝 빛남, 볼이 발그레, 입꼬리 올라간 미소. "
+            "절대로 눈을 감거나 반쯤 감으면 안 됨. 졸린 표정 금지"
+        ),
+        "action": "두 손으로 큰 하트를 앞으로 내밀며 수줍고 행복하게 정면 응시",
+        "body_pose": "상체 정면, 두 손으로 하트를 가슴 앞에 내밀며 미소 짓는 자세",
+        "motion_hint": "하트가 살짝 두근두근 맥박치듯 커졌다 작아짐",
+    },
     "배고파": {
         "emotion": "배고픔",
         "facial_expression": "눈이 반쯤 풀리고 입꼬리 처짐, 배고픔에 맥 빠진 표정",
