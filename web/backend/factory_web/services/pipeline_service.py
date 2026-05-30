@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
 import threading
 from pathlib import Path
@@ -295,7 +296,7 @@ class PipelineService:
             make_preview=True,
             no_ai_text=True,
             output_root=str(self.store.output_root(str(job["job_id"])).resolve()),
-            candidate_count=3,
+            candidate_count=1,
             candidate_openai_model=str(job.get("candidate_openai_model") or "gpt-image-1"),
             candidate_openai_mode=str(job.get("candidate_openai_mode") or "auto"),
             grid_mode=True,
@@ -330,28 +331,91 @@ class PipelineService:
                     error=None,
                 )
                 upload = self._resolve_upload(job_id)
-                opts = self._options(job, upload)
-                opts = PipelineOptions(**{**opts.__dict__, "make_candidates": True})
                 logs: list[str] = []
-                res = self.runner.generate_candidates(
-                    opts, log=self._log_sink(job_id, logs)
+                detected_species = ""
+
+                # ── Step 1: 일러스트 후보 생성 (count=1) ─────────────────────
+                opts_illus = self._options(job, upload)
+                opts_illus = PipelineOptions(**{
+                    **opts_illus.__dict__,
+                    "make_candidates": True,
+                    "candidate_count": 1,
+                    "art_style": "illustration",
+                })
+                self.store.update(job_id, progress=10, message="일러스트 스타일 후보 생성 중...")
+                res_illus = self.runner.generate_candidates(
+                    opts_illus, log=self._log_sink(job_id, logs)
                 )
-                pkg = res.package_dir
-                # 자동감지 결과를 로그에서 파싱해서 job에 저장
+                if res_illus.returncode != 0:
+                    self.store.update(
+                        job_id,
+                        phase="failed",
+                        progress=0,
+                        message="후보 생성 실패",
+                        error=_format_pipeline_error(res_illus.returncode, logs),
+                        log_tail="".join(logs)[-12000:],
+                    )
+                    return
+
+                pkg = res_illus.package_dir
                 detected_species = _parse_detected_species("".join(logs))
+
+                # 일러스트 후보 메모리에 백업 (두 번째 run이 덮어쓸 수 있으므로)
+                cand_dir = pkg / "character_candidates"
+                illus_src = cand_dir / "candidate_00.png"
+                illus_bytes: bytes | None = (
+                    illus_src.read_bytes() if illus_src.is_file() else None
+                )
+
+                # ── Step 2: 실사 후보 생성 (count=1) ─────────────────────────
+                opts_real = self._options(job, upload)
+                opts_real = PipelineOptions(**{
+                    **opts_real.__dict__,
+                    "make_candidates": True,
+                    "candidate_count": 1,
+                    "art_style": "realistic",
+                })
+                self.store.update(job_id, progress=50, message="실사 스타일 후보 생성 중...")
+                res_real = self.runner.generate_candidates(
+                    opts_real, log=self._log_sink(job_id, logs)
+                )
+
+                # ── 파일 배치: candidate_00=일러스트, candidate_01=실사 ────────
+                cand_dir.mkdir(parents=True, exist_ok=True)
+                if res_real.returncode == 0:
+                    real_src = cand_dir / "candidate_00.png"
+                    real_dst = cand_dir / "candidate_01.png"
+                    if real_src.is_file():
+                        shutil.move(str(real_src), str(real_dst))
+                # 일러스트 후보 복원
+                if illus_bytes:
+                    illus_src.write_bytes(illus_bytes)
+
+                # 자동감지 결과를 로그에서 파싱해서 job에 저장
+                if not detected_species:
+                    detected_species = _parse_detected_species("".join(logs))
+
+                count_ready = sum(
+                    1 for i in range(4)
+                    if (cand_dir / f"candidate_{i:02d}.png").is_file()
+                )
+                msg = (
+                    "후보가 준비되었습니다."
+                    if count_ready >= 2
+                    else "후보가 준비되었습니다. (일러스트만)"
+                )
                 update_kwargs: dict = dict(
-                    phase="candidates_ready" if res.returncode == 0 else "failed",
-                    progress=100 if res.returncode == 0 else 0,
-                    message="후보가 준비되었습니다." if res.returncode == 0 else "후보 생성 실패",
-                    package_dir=str(pkg.resolve()) if pkg else None,
-                    error=None
-                    if res.returncode == 0
-                    else _format_pipeline_error(res.returncode, logs),
+                    phase="candidates_ready",
+                    progress=100,
+                    message=msg,
+                    package_dir=str(pkg.resolve()),
+                    error=None,
                     log_tail="".join(logs)[-12000:],
                 )
                 if detected_species:
                     update_kwargs["species_hint"] = detected_species
                 self.store.update(job_id, **update_kwargs)
+
             except Exception as exc:
                 self.store.update(
                     job_id,
