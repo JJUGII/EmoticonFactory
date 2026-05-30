@@ -86,9 +86,9 @@ export function StepCandidates({
       >
         {candidates.map((c) => {
           const active = selected === c.index;
-          // 0,1 = 일러스트 A/B / 2,3 = 실사풍 A/B
-          const isIllus = c.index < 2;
-          const variant = isIllus ? (c.index === 0 ? "A" : "B") : (c.index === 2 ? "A" : "B");
+          // 1,2 = 일러스트 A/B / 3,4 = 실사풍 A/B  (파이프라인 1-based)
+          const isIllus = c.index <= 2;
+          const variant = isIllus ? (c.index === 1 ? "A" : "B") : (c.index === 3 ? "A" : "B");
           const styleLabel = isIllus
             ? { emoji: "🎨", name: `일러스트 ${variant}`, sub: "치비·수채화" }
             : { emoji: "📸", name: `실사풍 ${variant}`, sub: "CG·디지털 아트" };

@@ -361,11 +361,13 @@ class PipelineService:
                 detected_species = _parse_detected_species("".join(logs))
 
                 # 일러스트 후보 2장 메모리에 백업 (두 번째 run이 덮어쓸 수 있으므로)
+                # 파이프라인은 1-based: candidate_01.png, candidate_02.png
                 cand_dir = pkg / "character_candidates"
-                illus_backup: list[bytes | None] = []
-                for i in range(2):
+                illus_backup: dict[int, bytes] = {}
+                for i in (1, 2):
                     p = cand_dir / f"candidate_{i:02d}.png"
-                    illus_backup.append(p.read_bytes() if p.is_file() else None)
+                    if p.is_file():
+                        illus_backup[i] = p.read_bytes()
 
                 # ── Step 2: 실사 후보 생성 (count=2) ─────────────────────────
                 opts_real = self._options(job, upload)
@@ -380,27 +382,26 @@ class PipelineService:
                     opts_real, log=self._log_sink(job_id, logs)
                 )
 
-                # ── 파일 배치 ────────────────────────────────────────────────
-                # candidate_00,01 = 일러스트 / candidate_02,03 = 실사
+                # ── 파일 배치 (모두 1-based) ──────────────────────────────────
+                # 최종: candidate_01,02 = 일러스트 A/B / candidate_03,04 = 실사 A/B
                 cand_dir.mkdir(parents=True, exist_ok=True)
                 if res_real.returncode == 0:
-                    # 실사 후보: candidate_00→02, candidate_01→03
-                    for src_i, dst_i in [(1, 3), (0, 2)]:  # 역순으로 충돌 방지
+                    # 실사 후보: candidate_02→04, candidate_01→03 (역순으로 충돌 방지)
+                    for src_i, dst_i in [(2, 4), (1, 3)]:
                         src = cand_dir / f"candidate_{src_i:02d}.png"
                         dst = cand_dir / f"candidate_{dst_i:02d}.png"
                         if src.is_file():
                             shutil.move(str(src), str(dst))
-                # 일러스트 후보 복원: candidate_00, candidate_01
-                for i, data in enumerate(illus_backup):
-                    if data:
-                        (cand_dir / f"candidate_{i:02d}.png").write_bytes(data)
+                # 일러스트 후보 복원: candidate_01, candidate_02
+                for i, data in illus_backup.items():
+                    (cand_dir / f"candidate_{i:02d}.png").write_bytes(data)
 
                 # 자동감지 결과를 로그에서 파싱해서 job에 저장
                 if not detected_species:
                     detected_species = _parse_detected_species("".join(logs))
 
                 count_ready = sum(
-                    1 for i in range(4)
+                    1 for i in (1, 2, 3, 4)
                     if (cand_dir / f"candidate_{i:02d}.png").is_file()
                 )
                 msg = (

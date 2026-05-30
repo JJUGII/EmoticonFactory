@@ -145,8 +145,8 @@ export default function HomePage() {
     setStep(4);
     setLoading(true);
     try {
-      // 선택한 후보 번호로 스타일 자동 결정: 0,1=일러스트 / 2,3=실사풍
-      const inferredStyle = (selectedCandidate ?? 0) >= 2 ? "realistic" : "illustration";
+      // 선택한 후보 번호로 스타일 자동 결정: 1,2=일러스트 / 3,4=실사풍 (파이프라인 1-based)
+      const inferredStyle = (selectedCandidate ?? 0) >= 3 ? "realistic" : "illustration";
       const initial = await generateEmoticons(jobId, emotions, generator, true, inferredStyle);
       setJobStatus(initial);
       stopPollRef.current?.();
