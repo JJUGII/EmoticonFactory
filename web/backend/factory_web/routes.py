@@ -446,9 +446,56 @@ def discord_upload(job_id: str, guild_id: str) -> dict:
 
 # ── Slack ────────────────────────────────────────────────────────────────────
 
+@router.get("/export/slack/download/{job_id}")
+def slack_download(job_id: str) -> StreamingResponse:
+    """Slack 규격(PNG, 정사각형, 128KB 이하) ZIP 다운로드."""
+    try:
+        doc = store.load(job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+
+    if doc.get("phase") != "completed":
+        raise HTTPException(400, detail=f"이모티콘 생성이 완료되지 않았습니다. (phase={doc.get('phase')})")
+
+    pkg_s = doc.get("package_dir")
+    if not pkg_s:
+        raise HTTPException(400, detail="패키지 경로가 없습니다.")
+
+    from pathlib import Path
+    from factory_web.services.exporters.image_converter import convert_all_pngs
+
+    pkg = Path(pkg_s)
+    png_dir = pkg / "png"
+    if not png_dir.is_dir():
+        png_dir = pkg / "png_no_text"
+    if not png_dir.is_dir():
+        raise HTTPException(400, detail="PNG 폴더 없음")
+
+    emotions: list[str] = doc.get("emotions") or []
+    converted = convert_all_pngs(png_dir, "discord")  # PNG, 320px, 500KB 이하
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for i, (cut_id, png_bytes) in enumerate(converted):
+            emotion = emotions[i] if i < len(emotions) else f"sticker{i}"
+            # Slack 이모지 이름 규칙 적용
+            import re
+            safe = re.sub(r"[^a-z0-9_\-]", "", emotion.lower().replace(" ", "_"))
+            name = safe[:30] if len(safe) >= 2 else f"sticker_{cut_id}"
+            zf.writestr(f"slack_emoji/{name}.png", png_bytes)
+
+    buf.seek(0)
+    series = doc.get("series_name", "emoticons")
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="slack_{series}.zip"'},
+    )
+
+
 @router.post("/export/slack/{job_id}")
 def slack_upload(job_id: str, token: str) -> dict:
-    """Slack 커스텀 이모지 업로드. token = xoxp-... (User OAuth Token)."""
+    """Slack 커스텀 이모지 업로드. token = xoxp-... (User OAuth Token, Enterprise Grid 전용)."""
     try:
         doc = store.load(job_id)
     except FileNotFoundError as exc:

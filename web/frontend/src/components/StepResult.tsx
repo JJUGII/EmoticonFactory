@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { downloadZipUrl, exportToTelegram, getDiscordBotInviteUrl, uploadToDiscord, uploadToSlack } from "@/lib/api";
+import { downloadZipUrl, downloadSlackZipUrl, exportToTelegram, getDiscordBotInviteUrl, uploadToDiscord } from "@/lib/api";
 
 type Cut = { id: string; text: string; url?: string | null };
 
@@ -23,9 +23,6 @@ export function StepResult({ jobId, cuts, onRestart, onReselect }: Props) {
   const [dcBotUrl, setDcBotUrl]   = useState("");
   const [guildId, setGuildId]     = useState("");
   const [dcResult, setDcResult]   = useState<{ uploaded_count: number } | null>(null);
-  const [slackState, setSlackState] = useState<ExportState>("idle");
-  const [slackToken, setSlackToken] = useState("");
-  const [slackResult, setSlackResult] = useState<{ uploaded_count: number; workspace: string } | null>(null);
   const [errMsg, setErrMsg]       = useState("");
 
   const saveAll = () => window.open(downloadZipUrl(jobId), "_blank");
@@ -55,23 +52,6 @@ export function StepResult({ jobId, cuts, onRestart, onReselect }: Props) {
     } catch (e: unknown) {
       setErrMsg(e instanceof Error ? e.message : "오류 발생");
       setDcState("error");
-    }
-  };
-
-  const handleSlackUpload = async () => {
-    if (!slackToken.trim()) {
-      setErrMsg("Slack 토큰을 입력해 주세요");
-      return;
-    }
-    setSlackState("loading");
-    setErrMsg("");
-    try {
-      const result = await uploadToSlack(jobId, slackToken.trim());
-      setSlackResult(result);
-      setSlackState("done");
-    } catch (e: unknown) {
-      setErrMsg(e instanceof Error ? e.message : "업로드 실패");
-      setSlackState("error");
     }
   };
 
@@ -220,50 +200,21 @@ export function StepResult({ jobId, cuts, onRestart, onReselect }: Props) {
         </div>
 
         {/* Slack */}
-        <div className="space-y-2">
-          {slackState !== "done" ? (
-            <div className="space-y-2">
-              <div className="rounded-xl border border-[#4A154B]/20 bg-[#4A154B]/5 p-3 space-y-2">
-                <p className="text-xs font-semibold text-[#4A154B]">
-                  Slack 커스텀 이모지로 추가
-                </p>
-                <p className="text-xs text-kakao-brown/60">
-                  Slack 앱 포털 → OAuth &amp; Permissions → User OAuth Token 복사
-                </p>
-                <input
-                  type="password"
-                  value={slackToken}
-                  onChange={(e) => setSlackToken(e.target.value)}
-                  placeholder="xoxp-로 시작하는 토큰 붙여넣기"
-                  className="w-full rounded-lg border border-kakao-brown/20 bg-white px-3 py-2 text-sm outline-none focus:border-[#4A154B]"
-                />
-                <button
-                  type="button"
-                  onClick={handleSlackUpload}
-                  disabled={slackState === "loading" || !slackToken.trim()}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl py-3 font-bold text-white disabled:opacity-60"
-                  style={{ backgroundColor: "#4A154B" }}
-                >
-                  {slackState === "loading" ? (
-                    <span className="animate-pulse">업로드 중…</span>
-                  ) : (
-                    <>
-                      <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current">
-                        <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"/>
-                      </svg>
-                      Slack 이모지 업로드
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          ) : (
-            slackResult && (
-              <div className="rounded-xl bg-[#4A154B]/10 px-3 py-2 text-center text-xs text-[#4A154B] font-medium">
-                ✅ Slack {slackResult.workspace}에 이모지 {slackResult.uploaded_count}개 추가 완료!
-              </div>
-            )
-          )}
+        <div className="space-y-1">
+          <button
+            type="button"
+            onClick={() => window.open(downloadSlackZipUrl(jobId), "_blank")}
+            className="flex w-full items-center justify-center gap-2 rounded-xl py-3 font-bold text-white"
+            style={{ backgroundColor: "#4A154B" }}
+          >
+            <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current">
+              <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"/>
+            </svg>
+            Slack 이모지 다운로드 (ZIP)
+          </button>
+          <p className="text-center text-xs text-kakao-brown/50">
+            다운로드 후 → slack.com/customize/emoji 에서 업로드
+          </p>
         </div>
 
         {/* 에러 메시지 */}
