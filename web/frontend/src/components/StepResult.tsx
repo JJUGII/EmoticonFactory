@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { downloadZipUrl, downloadSlackZipUrl, exportToTelegram, getDiscordBotInviteUrl, uploadToDiscord } from "@/lib/api";
+import { downloadZipUrl, downloadSlackZipUrl, exportToTelegram, getDiscordBotInviteUrl, uploadToDiscord, portfolioUrl } from "@/lib/api";
 
 type Cut = { id: string; text: string; url?: string | null };
 
@@ -224,11 +224,28 @@ export function StepResult({ jobId, cuts, onRestart, onReselect }: Props) {
           </p>
         )}
 
+        {/* 포트폴리오 */}
+        <div className="rounded-xl bg-kakao-yellow/20 p-4 space-y-2 border border-kakao-yellow/50">
+          <p className="text-center text-xs font-bold text-kakao-brown/80">
+            ✨ 자녀·지인에게 자랑하기
+          </p>
+          <button
+            type="button"
+            onClick={() => window.open(portfolioUrl(jobId), "_blank")}
+            className="w-full rounded-xl bg-kakao-yellow py-3 font-bold text-kakao-brown flex items-center justify-center gap-2"
+          >
+            📋 포트폴리오 보기
+          </button>
+          <p className="text-center text-[11px] text-kakao-brown/50">
+            브라우저에서 열어 인쇄·PDF 저장·링크 공유
+          </p>
+        </div>
+
         <div className="pt-1 border-t border-kakao-brown/10 space-y-2">
           <button
             type="button"
             onClick={saveAll}
-            className="w-full rounded-xl bg-kakao-yellow py-3 font-bold text-kakao-brown"
+            className="w-full rounded-xl bg-white border border-kakao-brown/15 py-3 font-bold text-kakao-brown"
           >
             모두 저장 (ZIP)
           </button>

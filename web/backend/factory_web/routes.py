@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from factory_web.config import ALLOWED_UPLOAD_EXT, DEFAULT_EMOTIONS, MAX_UPLOAD_BYTES
 from factory_web.models import (
@@ -253,6 +253,21 @@ def list_candidates(job_id: str) -> CandidatesResponse:
     return CandidatesResponse(job_id=job_id, candidates=items)
 
 
+@router.get("/portfolio/{job_id}", response_class=HTMLResponse)
+def portfolio_preview(job_id: str) -> HTMLResponse:
+    """브라우저에서 바로 볼 수 있는 포트폴리오 HTML (이미지 base64 인라인)."""
+    try:
+        doc = store.load(job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+    pkg_s = doc.get("package_dir")
+    if not pkg_s:
+        raise HTTPException(400, detail="패키지가 없습니다.")
+    from factory_web.services.portfolio_builder import build_portfolio_html
+    html_str = build_portfolio_html(doc, Path(pkg_s), embed=True)
+    return HTMLResponse(content=html_str)
+
+
 @router.get("/download/{job_id}")
 def download_zip(job_id: str) -> StreamingResponse:
     try:
@@ -266,12 +281,20 @@ def download_zip(job_id: str) -> StreamingResponse:
     sticker = pkg / "png" if (pkg / "png").is_dir() else pkg / "png_no_text"
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        # 이모티콘 PNG
         if sticker.is_dir():
             for png in sorted(sticker.glob("*.png")):
-                zf.write(png, arcname=f"emoticons/{png.name}")
+                subdir = sticker.name  # "png" or "png_no_text"
+                zf.write(png, arcname=f"{subdir}/{png.name}")
+        # 캐릭터 원본
         canon = pkg / "character" / "canonical_character.png"
         if canon.is_file():
-            zf.write(canon, arcname="canonical_character.png")
+            zf.write(canon, arcname="character/canonical_character.png")
+        # 포트폴리오 HTML (상대 경로 모드)
+        from factory_web.services.portfolio_builder import build_portfolio_html
+        portfolio_html = build_portfolio_html(doc, pkg, embed=False)
+        zf.writestr("portfolio.html", portfolio_html.encode("utf-8"))
+        # 레거시 preview.html
         prev = pkg / "preview.html"
         if prev.is_file():
             zf.write(prev, arcname="preview.html")
