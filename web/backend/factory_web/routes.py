@@ -547,7 +547,8 @@ def subscribe_push(job_id: str, body: dict) -> dict:
         store.load(job_id)
     except FileNotFoundError as exc:
         raise HTTPException(404, detail=str(exc)) from exc
-    store.update(job_id, push_subscription=body.get("subscription"))
+    # body 자체가 PushSubscription.toJSON() 결과 (endpoint + keys)
+    store.update(job_id, push_subscription=body)
     return {"ok": True}
 
 
