@@ -28,6 +28,7 @@ import {
 } from "@/lib/imageFile";
 import { requestPushForJob } from "@/lib/pushNotification";
 import { registerSmsPhone } from "@/lib/smsNotification";
+import { compressIfNeeded } from "@/lib/imageCompressor";
 
 type Step = 1 | 2 | 3 | 4 | 5;
 
@@ -150,13 +151,16 @@ export default function HomePage() {
     logFileMeta(file);
     setUploadError(null);
     clearPreviewBlob();
+    // 미리보기는 원본 파일로 (화질 유지)
     const blobUrl = createPreviewObjectUrl(file);
     previewBlobRef.current = blobUrl;
     setPreviewUrl(blobUrl);
 
     setLoading(true);
     try {
-      const res = await uploadPhoto(file, { generator: "openai" });
+      // Vercel 프록시 4MB 제한 대응: 3MB 초과 시 자동 압축
+      const fileToUpload = await compressIfNeeded(file);
+      const res = await uploadPhoto(fileToUpload, { generator: "openai" });
       setJobId(res.job_id);
     } catch (e) {
       console.error("[UPLOAD_ERROR]", e);
