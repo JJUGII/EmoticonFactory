@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { downloadZipUrl, downloadSlackZipUrl, exportToTelegram, getDiscordBotInviteUrl, uploadToDiscord, portfolioUrl } from "@/lib/api";
+import { downloadZipUrl, downloadSlackZipUrl, exportToTelegram, getDiscordBotInviteUrl, uploadToDiscord } from "@/lib/api";
+import { openPortfolio } from "@/lib/portfolioClient";
 
 type Cut = { id: string; text: string; url?: string | null };
 
@@ -231,7 +232,7 @@ export function StepResult({ jobId, cuts, onRestart, onReselect }: Props) {
           </p>
           <button
             type="button"
-            onClick={() => window.open(portfolioUrl(jobId), "_blank")}
+            onClick={() => openPortfolio(cuts, { date: new Date().toISOString().slice(0, 10) })}
             className="w-full rounded-xl bg-kakao-yellow py-3 font-bold text-kakao-brown flex items-center justify-center gap-2"
           >
             📋 포트폴리오 보기

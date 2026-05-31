@@ -190,9 +190,6 @@ export function downloadZipUrl(jobId: string): string {
   return apiUrl(`/api/download/${jobId}`);
 }
 
-export function portfolioUrl(jobId: string): string {
-  return apiUrl(`/api/portfolio/${jobId}`);
-}
 
 // ── 플랫폼 내보내기 ────────────────────────────────────────────────────────
 
