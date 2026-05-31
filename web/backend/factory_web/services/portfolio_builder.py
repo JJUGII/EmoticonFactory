@@ -4,8 +4,11 @@ ZIP 안에 portfolio.html 로 동봉되거나,
 /api/jobs/{job_id}/portfolio 엔드포인트로 브라우저에 직접 렌더링됩니다.
 
 이미지 경로 모드:
-  - embed=True  : base64 data URI 인라인 (브라우저 미리보기, 이메일 공유용)
-  - embed=False : 상대 경로 png/01.png (ZIP 내부 오프라인 열람용)
+  - embed=True        : base64 data URI 인라인 (ZIP 오프라인 열람용)
+  - embed=False       : 상대 경로 png/01.png (ZIP 내부 오프라인 열람용)
+  - api_base 지정 시  : API URL 참조 — 이미지를 별도 요청으로 로드 (브라우저 미리보기용)
+                        e.g. api_base="/api", job_id="abc123"
+                        → <img src="/api/files/abc123/package/png_no_text/01.png">
 """
 
 from __future__ import annotations
@@ -41,14 +44,20 @@ def build_portfolio_html(
     job: dict[str, Any],
     pkg: Path,
     *,
-    embed: bool = True,
+    embed: bool = False,
+    api_base: str = "",
+    job_id: str = "",
 ) -> str:
     """포트폴리오 HTML 문자열을 반환합니다.
 
     Args:
-        job:   job.json 데이터 dict
-        pkg:   패키지 디렉터리 (png/, character/ 등이 있는 곳)
-        embed: True=이미지 base64 인라인, False=상대경로(ZIP용)
+        job:      job.json 데이터 dict
+        pkg:      패키지 디렉터리 (png/, character/ 등이 있는 곳)
+        embed:    True = 이미지 base64 인라인 (ZIP 오프라인용)
+                  False + api_base = API URL 참조 (브라우저 미리보기용, 크기 최소화)
+                  False + no api_base = 상대경로 (ZIP 내부용)
+        api_base: API 베이스 URL (예: "/api" 또는 "https://example.com/api")
+        job_id:   job ID (api_base 사용 시 필수)
     """
     cuts: list[dict] = job.get("cuts") or []
     created_at: str = job.get("created_at", "")[:10] or datetime.now().strftime("%Y-%m-%d")
@@ -56,16 +65,21 @@ def build_portfolio_html(
     style_label = "일러스트 스타일" if "illus" in art_style.lower() else \
                   "실사 스타일"     if "real"  in art_style.lower() else "AI 생성"
 
+    use_api = bool(api_base and job_id)
+    png_subdir = "png_no_text" if (pkg / "png_no_text").is_dir() else "png"
+
     # ── 캐릭터 대표 이미지 ──────────────────────────────────────────────────
     canon_path = pkg / "character" / "canonical_character.png"
     if embed:
         canon_src = _b64_img(canon_path) or ""
+    elif use_api:
+        canon_src = f"{api_base}/files/{job_id}/package/character/canonical_character.png"
     else:
         canon_src = "character/canonical_character.png"
     has_canon = canon_path.is_file()
 
     # ── 이모티콘 컷 이미지 목록 ─────────────────────────────────────────────
-    png_dir = pkg / "png_no_text" if (pkg / "png_no_text").is_dir() else pkg / "png"
+    png_dir = pkg / png_subdir
 
     cut_items: list[dict] = []
     for c in cuts:
@@ -74,9 +88,10 @@ def build_portfolio_html(
         fpath = png_dir / f"{cid}.png"
         if embed:
             src = _b64_img(fpath) or ""
+        elif use_api:
+            src = f"{api_base}/files/{job_id}/package/{png_subdir}/{cid}.png"
         else:
-            subdir = "png_no_text" if (pkg / "png_no_text").is_dir() else "png"
-            src = f"{subdir}/{cid}.png"
+            src = f"{png_subdir}/{cid}.png"
         cut_items.append({"id": cid, "text": text, "src": src, "ok": fpath.is_file()})
 
     # 빈 슬롯 채우기 (16개 맞춤)

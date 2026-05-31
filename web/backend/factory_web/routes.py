@@ -6,7 +6,7 @@ import io
 import zipfile
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from factory_web.config import ALLOWED_UPLOAD_EXT, DEFAULT_EMOTIONS, MAX_UPLOAD_BYTES
@@ -254,8 +254,11 @@ def list_candidates(job_id: str) -> CandidatesResponse:
 
 
 @router.get("/portfolio/{job_id}", response_class=HTMLResponse)
-def portfolio_preview(job_id: str) -> HTMLResponse:
-    """브라우저에서 바로 볼 수 있는 포트폴리오 HTML (이미지 base64 인라인)."""
+def portfolio_preview(job_id: str, request: "Request") -> HTMLResponse:
+    """브라우저에서 바로 볼 수 있는 포트폴리오 HTML.
+
+    이미지는 base64 인라인 대신 /api/files/... URL로 참조해 응답 크기를 최소화합니다.
+    """
     try:
         doc = store.load(job_id)
     except FileNotFoundError as exc:
@@ -263,8 +266,16 @@ def portfolio_preview(job_id: str) -> HTMLResponse:
     pkg_s = doc.get("package_dir")
     if not pkg_s:
         raise HTTPException(400, detail="패키지가 없습니다.")
+    # 요청 origin 기반 api_base 결정 (same-origin proxy 대응)
+    base_url = str(request.base_url).rstrip("/")
+    api_base = f"{base_url}/api"
     from factory_web.services.portfolio_builder import build_portfolio_html
-    html_str = build_portfolio_html(doc, Path(pkg_s), embed=True)
+    html_str = build_portfolio_html(
+        doc, Path(pkg_s),
+        embed=False,
+        api_base=api_base,
+        job_id=job_id,
+    )
     return HTMLResponse(content=html_str)
 
 
